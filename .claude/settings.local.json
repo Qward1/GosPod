@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m compileall -q app/docs/doc_ai.py app/max/bot_logic.py)",
+      "Bash(echo \"exit: $?\")"
+    ]
+  }
+}

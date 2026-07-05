@@ -1,0 +1,197 @@
+app:
+  description: 'Планировщик фильтра «Чата с ИИ» по карточкам УСВО. Вход — вопрос пользователя
+    (sys.query), выход — строгий JSON-фильтр (DSL) с вложенными AND/OR, числовыми сравнениями
+    и доступом к любому полю карточки (attr:<key>). Микросервис валидирует фильтр и исполняет
+    его в SQLite-индексе карточек (app/web/usvo_index.py) — фильтрация и подсчёты идут в БД,
+    а не в контексте модели (обходит лимит 32k и закрывает составные/числовые вопросы).
+    Подключается как dify.usvo_ai.filter_app_key (app/web/usvo_query.py::plan_filter). Базы
+    знаний НЕ требует. Без ключа микросервис разбирает вопрос офлайн-эвристикой. См. CLAUDE.md.'
+  icon: 🧮
+  icon_background: '#ECFEFF'
+  mode: advanced-chat
+  name: Планировщик фильтра по карточкам УСВО (Господдержка СВО)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: package
+  value:
+    plugin_unique_identifier: langgenius/openai_api_compatible:0.0.35@bb81bce2b7e04af8178eb2fb36cc6e1eb75aadbc98d31bc2c858b4648ba63c26
+    version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: start_node-source-filter_llm-target
+      source: start_node
+      sourceHandle: source
+      target: filter_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: answer
+      id: filter_llm-source-answer_node-target
+      source: filter_llm
+      sourceHandle: source
+      target: answer_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 'На вход — вопрос пользователя (sys.query). Полную инструкцию планировщика
+          микросервис также прикладывает к query (app/web/usvo_query.py::_FILTER_PROMPT).'
+        selected: false
+        title: Start
+        type: start
+        variables: []
+      height: 90
+      id: start_node
+      position: {x: 80, y: 282}
+      positionAbsolute: {x: 80, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 'Превращает вопрос в JSON-фильтр (DSL). База знаний не нужна — это только
+          классификация вопроса в структуру фильтров/агрегата.'
+        model:
+          completion_params: {temperature: 0}
+          mode: chat
+          name: qwen3-32b-fp8-v2
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: filter-sys
+          role: system
+          text: |
+            Ты — планировщик запросов по базе карточек УСВО (участники СВО). Преврати вопрос пользователя в строгий JSON-фильтр по схеме ниже. Только JSON, без markdown и пояснений.
+
+            Схема:
+            {
+              "intent": "count" | "list" | "aggregate" | "lookup" | "semantic",
+              "where": { "match": "all" | "any",
+                         "conditions": [ {"field": ..., "cmp": ..., "value": ...} | {"match": ..., "conditions": [...]} ] },
+              "aggregate_by": "" | <поле агрегации>,
+              "order_by": "" | "age" | "name" | "children_count" | "awards_count" | "disability_group" | "status" | "locality",
+              "order_dir": "asc" | "desc",
+              "limit": целое или 0
+            }
+
+            intent: count — «сколько/число»; list — «перечисли/покажи всех/кто»; aggregate — «распредели/статистика/разбивка»; lookup — о конкретном человеке по ФИО; semantic — вопрос НЕ про выборку по базе (общая справка, «что положено», совет) → тогда where=null и фильтры пустые.
+
+            Поля (field) и операторы:
+            - Текстовые (cmp: contains|=|!=|in|exists): name, status, locality, region, address, marital, support_need, awards, education, profession, phone, source. Для нечёткого совпадения — contains.
+            - gender (enum, cmp: =): "м" | "ж".
+            - Числовые (cmp: =|!=|>|>=|<|<=|between|in|exists): age, children_count, minor_children, disabled_children, disability_group, awards_count.
+            - Булевы (cmp: = со значением true/false, либо exists): disability, vbd, unemployed, needs_support, has_awards, in_org, org_vremya, org_geroi_mo, org_assoc, head_directive, stale_contact.
+            - Произвольное поле карточки: field="attr:<название поля>" (cmp: contains|=|>|>=|<|<=|between|exists). Только если подходящего канонического поля выше нет.
+
+            aggregate_by (для intent=aggregate): status, locality, gender, age_bucket, disability_group, children_count, disability, has_awards, in_org, vbd, marital, education, source, needs_support, unemployed.
+
+            Семантика:
+            - «дети/ребёнок» → children_count; «несовершеннолетние/малолетние дети» → minor_children; «дети-инвалиды / с ограниченными возможностями» → disabled_children; «многодетные» → children_count>=3.
+            - «инвалидность N группы» → disability_group = N; просто «инвалид» → disability = true.
+            - «ветеран боевых действий / ВБД» → vbd; «нужна работа / трудоустройство» → unemployed; «давно без связи» → stale_contact; «в организациях / Время героя / Герои Подмосковья / ассоциация» → in_org.
+            - «орден Мужества / медаль …» → awards contains "..."; «есть награды» → has_awards.
+            - Возраст: «старше N» → age > N; «младше/моложе N» → age < N; «от A до B» → age between [A,B].
+            - Несколько условий через «и» → match="all"; через «или» → match="any".
+
+            Примеры:
+            «сколько человек имеют больше трёх детей» → {"intent":"count","where":{"match":"all","conditions":[{"field":"children_count","cmp":">","value":3}]}}
+            «найди всех с инвалидностью 2 группы и двумя детьми» → {"intent":"list","where":{"match":"all","conditions":[{"field":"disability_group","cmp":"=","value":2},{"field":"children_count","cmp":"=","value":2}]}}
+            «сколько мобилизованных в Видном с орденом Мужества» → {"intent":"count","where":{"match":"all","conditions":[{"field":"status","cmp":"contains","value":"мобилизован"},{"field":"locality","cmp":"contains","value":"Видное"},{"field":"awards","cmp":"contains","value":"Мужества"}]}}
+            «распредели участников по возрастным группам» → {"intent":"aggregate","aggregate_by":"age_bucket"}
+            «у кого высшее образование и нужна работа» → {"intent":"list","where":{"match":"all","conditions":[{"field":"education","cmp":"contains","value":"высшее"},{"field":"unemployed","cmp":"=","value":true}]}}
+            «что положено многодетной семье участника СВО» → {"intent":"semantic","where":null}
+        - id: filter-user
+          role: user
+          text: |
+            {{#sys.query#}}
+        selected: false
+        structured_output:
+          schema:
+            type: object
+            additionalProperties: false
+            required:
+            - intent
+            properties:
+              intent:
+                type: string
+                enum: [count, list, aggregate, lookup, semantic]
+              where:
+                type: object
+                properties:
+                  match: {type: string, enum: [all, any]}
+                  conditions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        field: {type: string}
+                        cmp: {type: string}
+                        value: {}
+                        match: {type: string}
+                        conditions: {type: array}
+              aggregate_by: {type: string}
+              order_by: {type: string}
+              order_dir: {type: string}
+              limit: {type: integer}
+        structured_output_enabled: true
+        title: Планировщик фильтра (LLM)
+        type: llm
+      height: 98
+      id: filter_llm
+      position: {x: 384, y: 282}
+      positionAbsolute: {x: 384, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#filter_llm.text#}}'
+        desc: Возвращает JSON-фильтр (DSL) микросервису (plan_filter).
+        selected: false
+        title: Ответ (JSON-фильтр)
+        type: answer
+        variables: []
+      height: 106
+      id: answer_node
+      position: {x: 688, y: 282}
+      positionAbsolute: {x: 688, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

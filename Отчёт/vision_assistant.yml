@@ -1,0 +1,325 @@
+app:
+  description: 'Визуальный ассистент (VL): распознаёт фотографии документов участника СВО и предлагает
+    меру поддержки. Возвращает JSON по схеме forms.normalize_application. Подключается к микросервису
+    как dify.doc_vision_app_key (шаг ① сценария, см. PROMPTS.md). Модель VL выберите сами в узле «Распознавание
+    документов (VL)».'
+  icon: 📸
+  icon_background: '#FEF3C7'
+  mode: advanced-chat
+  name: Распознавание документов (Господдержка СВО)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: package
+  value:
+    plugin_unique_identifier: langgenius/openai_api_compatible:0.0.35@bb81bce2b7e04af8178eb2fb36cc6e1eb75aadbc98d31bc2c858b4648ba63c26
+    version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .jpg
+      - .jpeg
+      - .png
+      - .webp
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: true
+      image:
+        enabled: true
+        number_limits: 6
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 6
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: start_node-source-vision_llm-target
+      source: start_node
+      sourceHandle: source
+      target: vision_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: answer
+      id: vision_llm-source-answer_node-target
+      source: vision_llm
+      sourceHandle: source
+      target: answer_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: Фотографии документов приходят файлами сообщения (sys.files), текст-команда — в sys.query.
+          Загружает их MAX-бот через микросервис.
+        selected: false
+        title: Start
+        type: start
+        variables: []
+      height: 90
+      id: start_node
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 'Визуальная модель: распознаёт документы по фото и предлагает меру поддержки. Возвращает
+          строго JSON по схеме (та же, что у заполнителя).'
+        model:
+          completion_params:
+            temperature: 0.1
+            max_tokens: 0
+          mode: chat
+          name: qwen3-vl-8b-instruct
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: vis-sys
+          role: system
+          text: 'Ты — ассистент контакт-центра поддержки участников СВО Ленинского городского округа Московской
+            области. На вход поступают ФОТОГРАФИИ документов заявителя: паспорт РФ, удостоверение «Ветеран
+            боевых действий», квитанция/ЕПД с лицевыми счетами ЖКУ, свидетельства о рождении детей, реквизиты
+            банковского счёта.
+
+
+            Задачи:
+
+            1. Распознай документы и извлеки данные заявителя.
+
+            2. Определи доступную меру социальной поддержки. Если есть удостоверение ВБД или подтверждение
+            участия в СВО — основная мера: «Ежемесячная денежная компенсация расходов на оплату ЖКУ» (категория
+            «Ветеран боевых действий (участник СВО)», код 061).
+
+            3. Верни строго JSON по заданной схеме (без текста до/после, без markdown-ограждений).
+
+
+            Правила:
+
+            - Не выдумывай данные. Чего не видно на фото — оставь пустой строкой "" и добавь пункт в массив
+            missing.
+
+            - Серию и номер паспорта верни цифрами, даты — в формате ДД.ММ.ГГГГ.
+
+            - confidence — твоя уверенность в распознавании (0..1).
+
+            - Никакого текста вне JSON.'
+        - id: vis-user
+          role: user
+          text: 'Распознай приложенные фотографии документов и заполни JSON.
+
+            {{#sys.query#}}'
+        selected: false
+        structured_output:
+          schema:
+            type: object
+            additionalProperties: false
+            required:
+            - measure_key
+            - measure_title
+            - category
+            - category_code
+            - department
+            - applicant
+            - ownership
+            - rooms
+            - family
+            - providers
+            - payment
+            - missing
+            - confidence
+            - summary_note
+            properties:
+              measure_key:
+                type: string
+                description: Ключ меры, напр. zhku_compensation
+              measure_title:
+                type: string
+                description: Название меры поддержки
+              category:
+                type: string
+                description: Льготная категория (основание)
+              category_code:
+                type: string
+                description: Код льготной категории, напр. 061
+              department:
+                type: string
+                description: Наименование ТСП Минсоцразвития МО
+              applicant:
+                type: object
+                additionalProperties: false
+                required:
+                - fio
+                - birth_date
+                - passport_series
+                - passport_number
+                - passport_issued
+                - address
+                - phone
+                - email
+                properties:
+                  fio:
+                    type: string
+                  birth_date:
+                    type: string
+                    description: ДД.ММ.ГГГГ
+                  passport_series:
+                    type: string
+                  passport_number:
+                    type: string
+                  passport_issued:
+                    type: string
+                    description: кем и когда выдан
+                  address:
+                    type: string
+                  phone:
+                    type: string
+                  email:
+                    type: string
+              ownership:
+                type: string
+                enum:
+                - частное
+                - муниципальное
+                - государственное
+              rooms:
+                type: string
+              family:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - fio
+                  - birth_date
+                  - relation
+                  properties:
+                    fio:
+                      type: string
+                    birth_date:
+                      type: string
+                    relation:
+                      type: string
+              providers:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - name
+                  - account
+                  properties:
+                    name:
+                      type: string
+                    account:
+                      type: string
+              payment:
+                type: object
+                additionalProperties: false
+                required:
+                - method
+                - bank
+                - account
+                properties:
+                  method:
+                    type: string
+                    enum:
+                    - bank
+                    - post
+                  bank:
+                    type: string
+                  account:
+                    type: string
+              missing:
+                type: array
+                items:
+                  type: string
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              summary_note:
+                type: string
+        structured_output_enabled: true
+        title: Распознавание документов (VL)
+        type: llm
+        vision:
+          enabled: true
+          configs:
+            detail: high
+            variable_selector:
+            - sys
+            - files
+      height: 98
+      id: vision_llm
+      position:
+        x: 384
+        y: 282
+      positionAbsolute:
+        x: 384
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#vision_llm.text#}}'
+        desc: Возвращает JSON распознавания микросервису (doc_ai.analyze_documents).
+        selected: false
+        title: Ответ (JSON распознавания)
+        type: answer
+        variables: []
+      height: 106
+      id: answer_node
+      position:
+        x: 688
+        y: 282
+      positionAbsolute:
+        x: 688
+        y: 282
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.8

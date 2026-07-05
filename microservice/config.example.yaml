@@ -1,0 +1,227 @@
+# ============================================================================
+# Конфигурация микросервиса "Господдержка СВО".
+#
+# Это ЕДИНСТВЕННЫЙ источник настроек (вместо запрещённого на сервере .env).
+# Скопируйте файл в config.yaml и заполните реальными значениями.
+#
+# Путь к конфигу по умолчанию: ./config.yaml.
+# Можно переопределить переменной окружения CONFIG_PATH или флагом --config.
+# ============================================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  # Ключ для заголовка X-Api-Key на эндпоинте /excel/extract.
+  # Этот же ключ прописывается в Dify HTTP-узле (как в примере: X-Api-Key:112233).
+  api_key: "112233"
+
+excel:
+  # Бюджет символов на извлечённый текст таблицы (защита от переполнения 32k токенов).
+  # Оценка консервативная: ~2 символа кириллицы на токен, т.е. 60000 симв ≈ 30k токенов.
+  # При компактном формате (легенда столбцов + индексы) пример из 34×50 укладывается
+  # в ~44000 символов (~22k токенов) со всеми записями.
+  max_chars: 60000
+  # Выбрасывать пустые ячейки (таблица разрежена — это резко экономит токены).
+  drop_empty_cells: true
+
+dify:
+  # База API Dify (без завершающего слэша).
+  base_url: "https://dify.t1v.scibox.tech/v1"
+  # API-ключ Dify-ПРИЛОЖЕНИЯ (вкладка "API Access" приложения). Используется
+  # MAX-ботом для вызова MAX-ветки воркфлоу. Формат: app-xxxxxxxxxxxx.
+  max_app_key: "app-xxxxxxxxxxxxxxxx"
+  # ЕДИНЫЙ ассистент работы с документами (documents_assistant.yml) — ПРЕДПОЧТИТЕЛЬНО.
+  # Один advanced-chat с роутером по входу task на 4 ветки: read (прочитать документы
+  # текстом), extract (извлечь поля по списку), translate (перевести подписи полей),
+  # recognize (распознать ЖКУ-заявление). Заменяет vision_assistant.yml И прямые вызовы
+  # OpenRouter ниже. Когда задан — используется для всех документных сценариев бота.
+  # Пусто/плейсхолдер → старая логика (doc_vision_app_key / vision.provider).
+  documents_app_key: "app-xxxxxxxxxxxxxxxx"
+  # ЛЕГАСИ. Dify-воркфлоу только с распознаванием ЖКУ (vision_assistant.yml).
+  # Используется лишь когда documents_app_key пуст и vision.provider=dify.
+  doc_vision_app_key: "app-xxxxxxxxxxxxxxxx"
+  # Dify-ассистент, который заполняет заявление и собирает .docx по шаблону
+  # (document_assistant.yml, узел generate_docx). Пусто → .docx соберётся в коде.
+  doc_fill_app_key: "app-xxxxxxxxxxxxxxxx"
+  # Dify-ассистент, нормализующий свободный текст «Истории взаимодействия» карточки
+  # УСВО в JSON-события для красивого вывода (history_assistant.yml, подключается к
+  # базе знаний data/history_styles.md). Пусто/плейсхолдер → офлайн-нормализатор.
+  history_app_key: "app-xxxxxxxxxxxxxxxx"
+  # Dify-ассистент подбора меры поддержки по описанию ситуации гражданина
+  # (measure_assistant.yml, structured_output). Пусто/плейсхолдер → офлайн-подбор
+  # по ключевым словам (measures.match_measure_offline).
+  measure_app_key: "app-xxxxxxxxxxxxxxxx"
+  # Каталог для загруженных через веб-кабинет DOCX-шаблонов мер поддержки.
+  measure_templates_dir: "./data/measure_templates"
+  # DOCX-шаблон заявления: микросервис загружает его в Dify и передаёт в переменную
+  # `template` узла Start. Кладите новый шаблон сюда (путь от каталога microservice).
+  doc_template_path: "./data/Zayavlenie_Shablon.docx"
+
+  # ЛЕГАСИ-провайдер визуальной модели. Применяется ТОЛЬКО если documents_app_key
+  # выше не задан. Если documents_app_key заполнен — этот блок игнорируется.
+  # Вариант A: dify — использует doc_vision_app_key; промты внутри ассистента.
+  # Вариант B: openrouter — прямой вызов vision-модели; промты передаются из кода.
+  vision:
+    # dify | openrouter
+    provider: "dify"
+
+    # --- Вариант B: OpenRouter (легаси, заменяется documents_app_key) ---
+    # Эндпоинт совместим с OpenAI API. Можно заменить на любой OpenAI-compatible gateway.
+    openrouter_base_url: "https://openrouter.ai/api/v1"
+    openrouter_api_key: "sk-or-xxxxxxxxxxxxxxxx"
+    # Модель с поддержкой vision, напр.:
+    #   google/gemini-2.5-flash
+    #   google/gemini-2.0-flash-exp
+    #   anthropic/claude-3.5-sonnet
+    #   qwen/qwen2.5-vl-72b-instruct
+    openrouter_model: "google/gemini-2.5-flash"
+    temperature: 0.1
+    timeout: 90
+  # "Заранее выбранная база знаний" — куда записываются ответы операторов И куда
+  # АВТОМАТИЧЕСКИ выгружаются меры поддержки (каждая активная мера — отдельным
+  # документом «Мера поддержки #<id>: …» при создании/изменении в кабинете). Эта же
+  # база используется и для ответов на вопросы, и для подбора меры (measure_assistant.yml).
+  # Достаточно заполнить api_key и dataset_id — синхронизация включится сама.
+  dataset:
+    # API-ключ Knowledge/Dataset API (раздел "Knowledge API"). Формат: dataset-xxxx.
+    api_key: "dataset-xxxxxxxxxxxxxxxx"
+    # ID датасета (видно в URL базы знаний в Dify).
+    dataset_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+  # Отдельный ассистент и отдельная база знаний для раздела «Чат с ИИ».
+  # Ассистент должен быть Chat/Chatflow-приложением с подключённой этой базой.
+  # Микросервис передаёт ему системную инструкцию, историю, мета-информацию и
+  # выбранный формат ответа; карточки автоматически синхронизируются в dataset.
+  usvo_ai:
+    app_key: "app-xxxxxxxxxxxxxxxx"               # ключ usvo_chat_assistant.yml (сам чат)
+    # НОВЫЙ планировщик фильтра (usvo_filter_assistant.yml, structured_output DSL): вопрос →
+    # JSON-фильтр с вложенными AND/OR, числовыми сравнениями и доступом к любому полю карточки
+    # (attr:<key>). Микросервис валидирует фильтр и исполняет его в SQLite-индексе карточек —
+    # фильтрация/подсчёты в БД, а не в контексте модели. Пусто → офлайн-эвристика (plan_offline_v2).
+    filter_app_key: "app-xxxxxxxxxxxxxxxx"        # ← ВПИШИТЕ (или оставьте — офлайн-фолбэк)
+    # Файл производного SQLite-индекса карточек (полностью derived, пересобирается сам).
+    usvo_index_db: "./data/usvo_index.db"
+    # ЛЕГАСИ планировщик (usvo_query_assistant.yml, плоский QuerySpec): вопрос → фильтр/агрегат.
+    # Используется только если filter_app_key пуст и индекс не подан. Пусто → офлайн-разбор.
+    planner_app_key: ""                            # легаси; новый путь — filter_app_key выше
+    # ВРЕМЕННОЕ решение: ассистент полного контекста (usvo_full_context_assistant.yml).
+    # Если ключ задан — чат подаёт модели СРАЗУ ВСЕ карточки (без базы знаний и движка
+    # запросов); модель сама считает/перечисляет/агрегирует. Работает, пока карточек
+    # немного. Пусто → обычный режим (app_key + dataset + planner). Это поле имеет
+    # приоритет над app_key, когда задано.
+    full_context_app_key: ""                      # ← ВПИШИТЕ для режима полного контекста
+    full_context_max_chars: 45000                 # бюджет символов на блок всех карточек
+    timeout: 90
+    max_history_messages: 30
+    auto_sync: true
+    dataset:
+      api_key: "dataset-xxxxxxxxxxxxxxxx"
+      dataset_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+max:
+  # База MAX Bot API. Актуальная (июнь 2026) — platform-api.max.ru,
+  # авторизация заголовком Authorization: <token>. Старый botapi.max.ru устарел.
+  api_base_url: "https://platform-api.max.ru"
+  # Токен бота MAX (выдаётся @MasterBot при создании бота).
+  bot_token: "xxxxxxxxxxxxxxxxxxxxxxxx"
+  # ID чата операторов (куда уходят эскалации и заявки на приём).
+  operator_chat_id: "-1001234567890"
+  # После каждых N вопросов пользователю предлагается записаться на приём.
+  questions_before_offer: 2
+  # Порог уверенности: при confidence < порога ИЛИ found_in_kb=false — эскалация.
+  confidence_threshold: 0.6
+  # Порог тематического фильтра: запрос не по теме господдержки СВО (on_topic=false
+  # с topic_confidence ≥ порога) отклоняется базовым сообщением и НЕ идёт операторам.
+  topic_threshold: 0.5
+  # true → uvicorn сам опрашивает MAX (long polling) в фоне, публичный вебхук не нужен.
+  # Удобно для локальной разработки. Не включайте вместе с активной подпиской на вебхук.
+  polling: false
+
+storage:
+  # Файл SQLite с состоянием (счётчики, история вопросов, эскалации, заявки).
+  # Создаётся автоматически при первом запуске.
+  sqlite_path: "./data/state.db"
+
+# Веб-интерфейс «Контакт-центр» — кабинет оператора/администрации.
+# Раздаётся тем же uvicorn на том же ВНЕШНЕМ порту, что и API:
+#   http://<host>:8080/        — интерфейс
+#   http://<host>:8080/docs    — Swagger API
+# Регистрация не требуется (рассчитан на ~10 одновременных пользователей).
+# Авторизация веб-кабинета в стиле ЕСИА на базе Ory Kratos. Всё разворачивается
+# на сервере (deploy/kratos/docker-compose.yml). По умолчанию mode: demo —
+# вход работает сразу по локальному списку demo_users, без поднятого Kratos.
+auth:
+  enabled: true
+  # demo  — вход по списку demo_users (работает из коробки);
+  # kratos — учётки проверяются через Identity API Kratos (kratos_public_url).
+  # external — доступ уже проверяет внешний SSO/reverse proxy;
+  # demo/kratos — микросервис создаёт собственную cookie-сессию.
+  mode: "demo"  # external | demo | kratos
+  external_name: "Пользователь платформы"
+  external_role: "Оператор"
+  kratos_public_url: "http://localhost:4433"
+  # СМЕНИТЕ на проде: длинная случайная строка (подпись cookie-сессии кабинета).
+  session_secret: "change-me-please-set-a-long-random-secret"
+  session_ttl_hours: 12
+  # Отдельная БД учётных записей сотрудников. Их создаёт администратор в разделе
+  # «Настройки» (роль «Сотрудник»); хранится независимо от состояния бота.
+  employees_db: "./data/employees.db"
+  # Учётные записи администраторов (роль с «Администратор»/«admin» в названии).
+  # Сотрудники здесь НЕ перечисляются — их заводит админ через «Настройки».
+  demo_users:
+    - identifier: "operator@mosreg.ru"
+      password: "kontakt2026"
+      name: "Иванова О. П."
+      role: "Сотрудник"
+    - identifier: "admin@mosreg.ru"
+      password: "admin2026"
+      name: "Петров С. А."
+      role: "Администратор"
+
+web:
+  enabled: true
+  title: "Контакт-центр — Господдержка СВО"
+  # Excel-таблица УСВО — источник персональных карточек и аналитики.
+  usvo_xlsx: "../USVO_tablitsa_1_plus_49_synthetic_rows_dates_addresses_fixed.xlsx"
+  # Текст базы знаний — офлайн-источник предложений по льготам, если Dify не настроен.
+  kb_text: "../Информация для базы знаний.txt"
+  # УСВО без контакта дольше этого срока (дней) подсвечивается в аналитике.
+  contact_stale_days: 90
+  # Список операторов для назначения ответственного по обращению.
+  operators:
+    - "Иванова О. П."
+    - "Петров С. А."
+    - "Сидорова М. В."
+  # ИИ для веб-черновиков ответа и заметок в карточке УСВО.
+  # Не связан с MAX-веткой Dify выше: можно подключить отдельное Dify-приложение
+  # только с LLM или прямой OpenAI-compatible endpoint.
+  ai:
+    # local | dify | openai_compatible
+    provider: "local"
+
+    # Вариант 1: отдельное Dify-приложение для веба.
+    # В Dify создайте простое Chat/LLM-приложение, возьмите API key в API Access
+    # и поставьте provider: "dify".
+    dify_base_url: "https://dify.t1v.scibox.tech/v1"
+    dify_app_key: ""
+    # auto: сначала пробует /chat-messages, затем /completion-messages.
+    # Если точно знаете тип приложения, можно поставить chat или completion.
+    dify_mode: "auto"
+    # Для completion-приложения: имя input-переменной, в которую передаётся промпт.
+    dify_input_variable: "query"
+
+    # Вариант 2: модель напрямую, без Dify. Endpoint должен поддерживать
+    # POST {openai_base_url}/chat/completions.
+    # Пример openai_base_url: "https://api.openai.com/v1" или ваш OpenAI-compatible gateway.
+    openai_base_url: ""
+    openai_api_key: ""
+    openai_model: ""
+
+    temperature: 0.2
+    timeout: 60
+  # Если реальных обращений ещё нет (бот не запускался) — показать
+  # обращения, синтезированные из таблицы УСВО.
+  seed_appeals: true
+
+# Часто меняемый человекочитаемый файл с административными зданиями и слотами.
+schedule_file: "./data/schedule.yaml"

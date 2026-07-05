@@ -1,0 +1,39 @@
+# Self-hosted Ory Kratos для авторизации контакт-центра (ЕСИА-стиль).
+#
+# Запуск (из microservice/deploy/kratos):
+#   docker compose up -d
+#   # дождаться healthy и создать сотрудника (см. deploy/kratos/README.md):
+#   ./create-user.sh operator@mosreg.ru "kontakt2026" "Иванова О. П." Оператор
+#
+# Затем в config.yaml микросервиса:
+#   auth:
+#     mode: "kratos"
+#     kratos_public_url: "http://localhost:4433"   # или http://kratos:4433 в общей сети
+#
+# Порты: 4433 — public API (логин-флоу), 4434 — admin API (создание учёток).
+
+services:
+  kratos-migrate:
+    image: oryd/kratos:v1.1.0
+    volumes:
+      - kratos-sqlite:/var/lib/sqlite
+      - ./:/etc/config/kratos
+    command: -c /etc/config/kratos/kratos.yml migrate sql -e --yes
+    restart: on-failure
+
+  kratos:
+    image: oryd/kratos:v1.1.0
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "4433:4433"   # public
+      - "4434:4434"   # admin
+    volumes:
+      - kratos-sqlite:/var/lib/sqlite
+      - ./:/etc/config/kratos
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    restart: unless-stopped
+
+volumes:
+  kratos-sqlite:

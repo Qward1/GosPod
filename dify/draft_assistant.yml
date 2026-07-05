@@ -1,0 +1,147 @@
+app:
+  description: 'ИИ-помощник веб-кабинета «Контакт-центр»: готовит черновик официального
+    ответа гражданину по его обращению и формирует персональные предложения по мерам
+    поддержки. Универсальное приложение — задачу определяет по содержимому запроса
+    (есть «Вопрос гражданина» → черновик ответа; «рекомендации по направлениям поддержки»
+    → подбор мер). Подключается к микросервису как web.ai.dify_app_key (web.ai.provider=dify).
+    Динамическую часть запроса (вопрос + профиль карточки УСВО + фрагмент базы знаний)
+    микросервис кладёт в sys.query; системный промт — здесь. См. ai_prompts.txt, CLAUDE.md.'
+  icon: ✍️
+  icon_background: '#FEF3C7'
+  mode: advanced-chat
+  name: Черновик ответа и рекомендации (Господдержка СВО)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: package
+  value:
+    plugin_unique_identifier: langgenius/openai_api_compatible:0.0.35@bb81bce2b7e04af8178eb2fb36cc6e1eb75aadbc98d31bc2c858b4648ba63c26
+    version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: llm
+      id: start_node-source-draft_llm-target
+      source: start_node
+      sourceHandle: source
+      target: draft_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: answer
+      id: draft_llm-source-answer_node-target
+      source: draft_llm
+      sourceHandle: source
+      target: answer_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 'На вход (sys.query) — готовая динамическая часть запроса от микросервиса:
+          вопрос гражданина + профиль карточки УСВО + фрагмент базы знаний, либо профиль
+          для рекомендаций по мерам. Передаёт web/ai.py (draft_reply / recommendations).'
+        selected: false
+        title: Start
+        type: start
+        variables: []
+      height: 90
+      id: start_node
+      position: {x: 80, y: 282}
+      positionAbsolute: {x: 80, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 'Универсальный помощник оператора: черновик официального ответа гражданину
+          либо персональные предложения по мерам поддержки — задачу определяет по содержимому
+          запроса.'
+        model:
+          completion_params: {temperature: 0.3}
+          mode: chat
+          name: qwen3-32b-fp8-v2
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: draft-sys
+          role: system
+          text: |
+            Ты — ассистент единого центра поддержки участников СВО и членов их семей. Ты помогаешь оператору администрации двумя способами, определяя задачу по содержанию запроса:
+
+            1) Если в запросе есть «Вопрос гражданина» — составь содержательную часть официального ответа на это обращение. Пиши вежливо, по-деловому, конкретно и без «воды». Не добавляй приветствие и подпись — их подставит система.
+
+            2) Если запрос просит «рекомендации по направлениям поддержки» — на основе профиля человека перечисли, какие именно меры поддержки, льготы и услуги ему сейчас полезнее всего предложить. Для каждой меры коротко укажи суть, какие документы нужны и куда обращаться. Формат — компактный маркированный список, без вводных фраз и заключения.
+
+            Общие правила:
+              • Опирайся на переданный профиль и базу знаний; не выдумывай номера законов, суммы и сроки, которых нет в исходных данных.
+              • Если точных сведений нет — корректно предложи уточнить у профильного специалиста, без ложных нормативных ссылок.
+              • Отвечай на русском языке, адресно и практично.
+              • Выводи только готовый текст ответа/рекомендаций, без markdown-обёрток и служебных пояснений.
+        - id: draft-user
+          role: user
+          text: |
+            {{#sys.query#}}
+        selected: false
+        structured_output_enabled: false
+        title: Черновик / рекомендации (LLM)
+        type: llm
+      height: 98
+      id: draft_llm
+      position: {x: 384, y: 282}
+      positionAbsolute: {x: 384, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#draft_llm.text#}}'
+        desc: Возвращает готовый текст черновика/рекомендаций микросервису (web/ai.py читает
+          поле answer).
+        selected: false
+        title: Ответ (текст)
+        type: answer
+        variables: []
+      height: 106
+      id: answer_node
+      position: {x: 688, y: 282}
+      positionAbsolute: {x: 688, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

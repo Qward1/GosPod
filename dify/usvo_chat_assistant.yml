@@ -1,0 +1,198 @@
+app:
+  description: 'Ассистент раздела «Чат с ИИ» веб-кабинета «Контакт-центр»: отвечает на вопросы,
+    статистику и справки по текущим карточкам УСВО. Подключается к микросервису как
+    dify.usvo_ai.app_key (вызывается методом ask_text → /chat-messages). Весь контекст —
+    текущий вопрос, история диалога, мета-информация и инструкция формата ответа — приходит
+    уже собранным в поле query (см. app/web/ai_chat.py). Задача приложения: найти релевантные
+    карточки в подключённой базе знаний и ответить обычным текстом. Базу знаний (отдельный
+    датасет карточек УСВО, dify.usvo_ai.dataset) микросервис наполняет автоматически:
+    по документу на карточку «Карточка УСВО #<id>: <ФИО>» + документ «Мета-информация УСВО».
+    После импорта выберите датасет заново в узле «Карточки УСВО (база знаний)». См. CLAUDE.md,
+    USVO_CHAT_PROMPT.md.'
+  icon: 💬
+  icon_background: '#EFF6FF'
+  mode: advanced-chat
+  name: Чат с ИИ по карточкам УСВО (Господдержка СВО)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: package
+  value:
+    plugin_unique_identifier: langgenius/openai_api_compatible:0.0.35@bb81bce2b7e04af8178eb2fb36cc6e1eb75aadbc98d31bc2c858b4648ba63c26
+    version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: knowledge-retrieval
+      id: start_node-source-cards_kb-target
+      source: start_node
+      sourceHandle: source
+      target: cards_kb
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: knowledge-retrieval
+        targetType: llm
+      id: cards_kb-source-chat_llm-target
+      source: cards_kb
+      sourceHandle: source
+      target: chat_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: answer
+      id: chat_llm-source-answer_node-target
+      source: chat_llm
+      sourceHandle: source
+      target: answer_node
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 'На вход — собранный микросервисом запрос (sys.query): текущий вопрос + история
+          диалога + мета-информация + системная инструкция + инструкция формата ответа.
+          Передаёт app/web/ai_chat.py через ask_text. Доп. input-переменные не нужны.'
+        selected: false
+        title: Start
+        type: start
+        variables: []
+      height: 90
+      id: start_node
+      position: {x: 80, y: 282}
+      positionAbsolute: {x: 80, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        dataset_ids:
+        - REPLACE_WITH_USVO_AI_DATASET_ID
+        desc: 'Отдельная база знаний карточек УСВО (dify.usvo_ai.dataset). Микросервис кладёт
+          по документу на карточку + «Мета-информация УСВО». После импорта выберите датасет
+          в этом узле заново.'
+        multiple_retrieval_config:
+          reranking_enable: false
+          reranking_mode: weighted_score
+          score_threshold: 0.2
+          top_k: 12
+          weights:
+            keyword_setting:
+              keyword_weight: 0.3
+            vector_setting:
+              embedding_model_name: bge-m3-v2
+              embedding_provider_name: langgenius/openai_api_compatible/openai_api_compatible
+              vector_weight: 0.7
+            weight_type: customized
+        query_variable_selector:
+        - sys
+        - query
+        retrieval_mode: multiple
+        selected: false
+        title: Карточки УСВО (база знаний)
+        type: knowledge-retrieval
+      height: 92
+      id: cards_kb
+      position: {x: 384, y: 282}
+      positionAbsolute: {x: 384, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - cards_kb
+          - result
+        desc: 'Отвечает на вопрос по карточкам УСВО. Всё нужное (вопрос, история, мета,
+          инструкция формата) уже внутри sys.query; контекст — найденные карточки.'
+        model:
+          completion_params: {temperature: 0.2}
+          mode: chat
+          name: qwen3-32b-fp8-v2
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: chat-sys
+          role: system
+          text: |
+            Ты ассистент, который отвечает на вопросы пользователей по базе карточек УСВО (участников СВО) для сотрудников контакт-центра.
+
+            Найденные карточки и мета-информация из базы знаний:
+            {{#context#}}
+
+            ПРАВИЛА:
+            1. Отвечай только на основе доступных данных: найденного контекста, мета-информации, блока «Точные данные по всей базе» и истории диалога — всё это содержится в запросе пользователя.
+            2. Если данных недостаточно, прямо скажи, каких данных не хватает. Не выдумывай людей, категории, статусы или числа.
+            3. Если в запросе есть блок «Точные данные по всей базе» — это АВТОРИТЕТНЫЙ источник для списков, перечислений и чисел: он посчитан точно по ВСЕМ карточкам (а не только по найденным). Используй именно его числа и перечни; найденный контекст из базы знаний — лишь дополнение по конкретным людям. Если блок помечает список как усечённый — назови точное общее число и что показана часть.
+            8. Не описывай в ответе, как именно посчитаны данные (например, «рассчитано детерминированно», «по детерминированному подсчёту» и т. п.). Просто давай готовый ответ на вопрос.
+            4. Для статистических вопросов опирайся на блок точных данных и мета-информацию; приводи числа и поясняй их основание.
+            5. Для вопросов о конкретных людях используй данные карточек. Если упоминаешь человека из карточек УСВО, пиши его полное ФИО (по нему строится ссылка на карточку).
+            6. Строго соблюдай выбранный формат ответа (текст / развернутая справка / краткая справка) и его шаблон — они переданы в запросе.
+            7. Не добавляй markdown-обёртки и пояснения вне самого ответа.
+        - id: chat-user
+          role: user
+          text: |
+            {{#sys.query#}}
+        selected: false
+        title: Ответ по карточкам УСВО (LLM)
+        type: llm
+      height: 98
+      id: chat_llm
+      position: {x: 688, y: 282}
+      positionAbsolute: {x: 688, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#chat_llm.text#}}'
+        desc: Возвращает текстовый ответ микросервису (ask_text → поле answer).
+        selected: false
+        title: Ответ
+        type: answer
+        variables: []
+      height: 106
+      id: answer_node
+      position: {x: 992, y: 282}
+      positionAbsolute: {x: 992, y: 282}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 1

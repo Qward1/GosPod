@@ -1,0 +1,600 @@
+app:
+  description: 'Единый ассистент работы с документами (Господдержка СВО). Маршрутизирует по входу
+    task на 4 ветки: read — прочитать документы и описать ситуацию текстом; extract — извлечь значения
+    по динамическому списку полей шаблона меры ({filled_fields, missing_fields}); translate — перевести
+    технические подписи полей на понятный русский; recognize — распознать ЖКУ-заявление (фикс. JSON).
+    Заменяет vision_assistant.yml И прямые вызовы OpenRouter. Подключается к микросервису как
+    dify.documents_app_key (DocAI). VL-модель выберите сами в узлах read/extract/recognize.'
+  icon: 🗂️
+  icon_background: '#EDE9FE'
+  mode: advanced-chat
+  name: Документы (Господдержка СВО)
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: package
+  value:
+    plugin_unique_identifier: langgenius/openai_api_compatible:0.0.35@bb81bce2b7e04af8178eb2fb36cc6e1eb75aadbc98d31bc2c858b4648ba63c26
+    version: null
+kind: app
+version: 0.5.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .jpg
+      - .jpeg
+      - .png
+      - .webp
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: true
+      image:
+        enabled: true
+        number_limits: 6
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 6
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data: {isInIteration: false, isInLoop: false, sourceType: start, targetType: if-else}
+      id: start_node-source-router-target
+      source: start_node
+      sourceHandle: source
+      target: router
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: if-else, targetType: llm}
+      id: router-true-read_llm-target
+      source: router
+      sourceHandle: 'true'
+      target: read_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: if-else, targetType: llm}
+      id: router-extract-extract_llm-target
+      source: router
+      sourceHandle: case_extract
+      target: extract_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: if-else, targetType: llm}
+      id: router-translate-translate_llm-target
+      source: router
+      sourceHandle: case_translate
+      target: translate_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: if-else, targetType: llm}
+      id: router-false-recognize_llm-target
+      source: router
+      sourceHandle: 'false'
+      target: recognize_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: llm, targetType: answer}
+      id: read_llm-source-ans_read-target
+      source: read_llm
+      sourceHandle: source
+      target: ans_read
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: llm, targetType: answer}
+      id: extract_llm-source-ans_extract-target
+      source: extract_llm
+      sourceHandle: source
+      target: ans_extract
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: llm, targetType: answer}
+      id: translate_llm-source-ans_translate-target
+      source: translate_llm
+      sourceHandle: source
+      target: ans_translate
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data: {isInIteration: false, isInLoop: false, sourceType: llm, targetType: answer}
+      id: recognize_llm-source-ans_recognize-target
+      source: recognize_llm
+      sourceHandle: source
+      target: ans_recognize
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    # ====================== START ======================
+    - data:
+        desc: 'task — сценарий (read|extract|translate|recognize); fields — JSON-список полей
+          [{key,label}] для extract/translate; фотографии документов приходят файлами сообщения
+          (sys.files). Всё передаёт микросервис (DocAI).'
+        selected: false
+        title: Start
+        type: start
+        variables:
+        - allowed_file_extensions: []
+          allowed_file_types: []
+          allowed_file_upload_methods: []
+          default: recognize
+          hint: 'Сценарий: read — прочитать документы текстом; extract — извлечь поля по списку;
+            translate — перевести подписи полей; recognize — распознать ЖКУ-заявление (JSON).'
+          label: Задача (task)
+          max_length: 48
+          options: []
+          placeholder: ''
+          required: false
+          type: text-input
+          variable: task
+        - allowed_file_extensions: []
+          allowed_file_types: []
+          allowed_file_upload_methods: []
+          default: ''
+          hint: 'JSON-массив полей [{"key","label"}] для задач extract и translate. Для read/recognize
+            не используется.'
+          label: Поля шаблона (fields)
+          max_length: 8000
+          options: []
+          placeholder: ''
+          required: false
+          type: paragraph
+          variable: fields
+      height: 140
+      id: start_node
+      position: {x: 80, y: 360}
+      positionAbsolute: {x: 80, y: 360}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ====================== РОУТЕР ======================
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: cond-task-read
+            value: read
+            varType: string
+            variable_selector:
+            - start_node
+            - task
+          id: 'true'
+          logical_operator: and
+        - case_id: case_extract
+          conditions:
+          - comparison_operator: is
+            id: cond-task-extract
+            value: extract
+            varType: string
+            variable_selector:
+            - start_node
+            - task
+          id: case_extract
+          logical_operator: and
+        - case_id: case_translate
+          conditions:
+          - comparison_operator: is
+            id: cond-task-translate
+            value: translate
+            varType: string
+            variable_selector:
+            - start_node
+            - task
+          id: case_translate
+          logical_operator: and
+        desc: 'Детерминированный роутер по точному значению task: read → чтение текста; extract →
+          извлечение полей; translate → перевод подписей; иначе (recognize/пусто) → распознавание
+          ЖКУ-заявления. Сравнение «is» гарантирует ровно одну ветку.'
+        selected: false
+        title: Роутер по task
+        type: if-else
+      height: 180
+      id: router
+      position: {x: 384, y: 360}
+      positionAbsolute: {x: 384, y: 360}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ====================== ВЕТКА read ======================
+    - data:
+        context: {enabled: false, variable_selector: []}
+        desc: 'read: распознаёт документы по фото и описывает ситуацию заявителя обычным текстом
+          (вход для подбора меры поддержки, DocAI.read_documents_text). Без structured output.'
+        model:
+          completion_params: {temperature: 0.1, max_tokens: 0}
+          mode: chat
+          name: qwen3-vl-8b-instruct
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: read-sys
+          role: system
+          text: |
+            Ты — ассистент контакт-центра поддержки участников СВО Ленинского городского округа Московской области. На вход поступают ФОТОГРАФИИ документов заявителя.
+
+            Прочитай документы и кратко опиши их обычным текстом (НЕ JSON, без markdown): какие это документы, статус заявителя (например, ветеран боевых действий, участник СВО, член семьи участника СВО, вдова/родитель погибшего и т.п.) и любые факты, важные для подбора меры социальной поддержки: состав семьи и дети, жильё и оплата ЖКУ, инвалидность/ранение, потеря кормильца, трудоустройство и переобучение.
+
+            Правила:
+            - Описывай только то, что реально видно на фотографиях. Не выдумывай данные.
+            - 3–6 предложений связным текстом.
+        - id: read-user
+          role: user
+          text: |
+            Прочитай приложенные документы и опиши ситуацию заявителя текстом.
+            {{#sys.query#}}
+        selected: false
+        title: Чтение документов (read)
+        type: llm
+        vision:
+          enabled: true
+          configs:
+            detail: high
+            variable_selector:
+            - sys
+            - files
+      height: 120
+      id: read_llm
+      position: {x: 720, y: 60}
+      positionAbsolute: {x: 720, y: 60}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#read_llm.text#}}'
+        desc: Возвращает текстовое описание ситуации микросервису.
+        selected: false
+        title: Ответ (read)
+        type: answer
+        variables: []
+      height: 106
+      id: ans_read
+      position: {x: 1060, y: 60}
+      positionAbsolute: {x: 1060, y: 60}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ====================== ВЕТКА extract ======================
+    - data:
+        context: {enabled: false, variable_selector: []}
+        desc: 'extract: извлекает значения по динамическому списку полей шаблона меры (fields) и
+          возвращает {filled_fields, missing_fields} (DocAI.extract_fields). Без structured output —
+          ключи задаёт администратор меры, поэтому схема не фиксирована.'
+        model:
+          completion_params: {temperature: 0.1, max_tokens: 0}
+          mode: chat
+          name: qwen3-vl-8b-instruct
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: extract-sys
+          role: system
+          text: |
+            Ты — ассистент контакт-центра поддержки участников СВО Ленинского городского округа Московской области. На вход поступают ФОТОГРАФИИ документов заявителя.
+
+            Извлеки значения СТРОГО для полей из списка ниже. Список приходит в формате JSON-массива объектов {"key": "...", "label": "..."} (key — технический ключ поля, label — что это за поле):
+            {{#start_node.fields#}}
+
+            Верни СТРОГО JSON без текста до/после и без ```:
+            {"filled_fields": {"<ключ>": "<значение>"}, "missing_fields": ["<ключ>"]}
+
+            Правила:
+            - Не выдумывай данные. Чего не видно на фото — клади key в missing_fields, в filled_fields его не добавляй.
+            - Даты — в формате ДД.ММ.ГГГГ, серию и номер документов — цифрами.
+            - Ключи в ответе используй ровно те, что в поле key из списка.
+        - id: extract-user
+          role: user
+          text: |
+            Распознай приложенные документы и заполни JSON по указанным полям.
+            {{#sys.query#}}
+        selected: false
+        title: Извлечение полей (extract)
+        type: llm
+        vision:
+          enabled: true
+          configs:
+            detail: high
+            variable_selector:
+            - sys
+            - files
+      height: 120
+      id: extract_llm
+      position: {x: 720, y: 240}
+      positionAbsolute: {x: 720, y: 240}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#extract_llm.text#}}'
+        desc: Возвращает JSON {filled_fields, missing_fields} микросервису.
+        selected: false
+        title: Ответ (extract)
+        type: answer
+        variables: []
+      height: 106
+      id: ans_extract
+      position: {x: 1060, y: 240}
+      positionAbsolute: {x: 1060, y: 240}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ====================== ВЕТКА translate ======================
+    - data:
+        context: {enabled: false, variable_selector: []}
+        desc: 'translate: переводит технические подписи полей (fields) на понятный гражданину русский.
+          Текстовая задача — vision выключен (DocAI.translate_labels). Возвращает JSON {key: подпись}.'
+        model:
+          completion_params: {temperature: 0.0, max_tokens: 0}
+          mode: chat
+          name: qwen3-32b-fp8-v2
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: translate-sys
+          role: system
+          text: |
+            Ты переводишь технические названия полей анкеты на понятный гражданину русский язык. На вход — JSON-массив объектов {"key": "...", "label": "..."}:
+            {{#start_node.fields#}}
+
+            Для каждого поля дай короткую русскую подпись (1–4 слова, именительный падеж, без пояснений). Верни СТРОГО JSON без текста до/после и без ```:
+            {"<key>": "<русская подпись>", ...}
+            Ключи используй ровно те, что в поле key из списка.
+        - id: translate-user
+          role: user
+          text: |
+            Переведи названия полей в короткие русские подписи и верни JSON.
+        selected: false
+        title: Перевод подписей (translate)
+        type: llm
+        vision:
+          enabled: false
+      height: 120
+      id: translate_llm
+      position: {x: 720, y: 420}
+      positionAbsolute: {x: 720, y: 420}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#translate_llm.text#}}'
+        desc: 'Возвращает JSON соответствий «ключ → русская подпись» микросервису.'
+        selected: false
+        title: Ответ (translate)
+        type: answer
+        variables: []
+      height: 106
+      id: ans_translate
+      position: {x: 1060, y: 420}
+      positionAbsolute: {x: 1060, y: 420}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    # ====================== ВЕТКА recognize (ЖКУ, по умолчанию) ======================
+    - data:
+        context: {enabled: false, variable_selector: []}
+        desc: 'recognize (ветка по умолчанию): распознаёт документы и предлагает меру ЖКУ. Строго JSON
+          по фиксированной схеме (DocAI.analyze_documents, легаси-сценарий). Это замена vision_assistant.yml.'
+        model:
+          completion_params: {temperature: 0.1, max_tokens: 0}
+          mode: chat
+          name: qwen3-vl-8b-instruct
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - id: recognize-sys
+          role: system
+          text: |
+            Ты — ассистент контакт-центра поддержки участников СВО Ленинского городского округа Московской области. На вход поступают ФОТОГРАФИИ документов заявителя: паспорт РФ, удостоверение «Ветеран боевых действий», квитанция/ЕПД с лицевыми счетами ЖКУ, свидетельства о рождении детей, реквизиты банковского счёта.
+
+            Задачи:
+            1. Распознай документы и извлеки данные заявителя.
+            2. Определи доступную меру социальной поддержки. Если есть удостоверение ВБД или подтверждение участия в СВО — основная мера: «Ежемесячная денежная компенсация расходов на оплату ЖКУ» (категория «Ветеран боевых действий (участник СВО)», код 061).
+            3. Верни строго JSON по заданной схеме (без текста до/после, без markdown-ограждений).
+
+            Правила:
+            - Не выдумывай данные. Чего не видно на фото — оставь пустой строкой "" и добавь пункт в массив missing.
+            - Серию и номер паспорта верни цифрами, даты — в формате ДД.ММ.ГГГГ.
+            - confidence — твоя уверенность в распознавании (0..1).
+            - Никакого текста вне JSON.
+        - id: recognize-user
+          role: user
+          text: |
+            Распознай приложенные фотографии документов и заполни JSON.
+            {{#sys.query#}}
+        selected: false
+        structured_output:
+          schema:
+            type: object
+            additionalProperties: false
+            required:
+            - measure_key
+            - measure_title
+            - category
+            - category_code
+            - department
+            - applicant
+            - ownership
+            - rooms
+            - family
+            - providers
+            - payment
+            - missing
+            - confidence
+            - summary_note
+            properties:
+              measure_key:
+                type: string
+                description: Ключ меры, напр. zhku_compensation
+              measure_title:
+                type: string
+                description: Название меры поддержки
+              category:
+                type: string
+                description: Льготная категория (основание)
+              category_code:
+                type: string
+                description: Код льготной категории, напр. 061
+              department:
+                type: string
+                description: Наименование ТСП Минсоцразвития МО
+              applicant:
+                type: object
+                additionalProperties: false
+                required:
+                - fio
+                - birth_date
+                - passport_series
+                - passport_number
+                - passport_issued
+                - address
+                - phone
+                - email
+                properties:
+                  fio:
+                    type: string
+                  birth_date:
+                    type: string
+                    description: ДД.ММ.ГГГГ
+                  passport_series:
+                    type: string
+                  passport_number:
+                    type: string
+                  passport_issued:
+                    type: string
+                    description: кем и когда выдан
+                  address:
+                    type: string
+                  phone:
+                    type: string
+                  email:
+                    type: string
+              ownership:
+                type: string
+                enum:
+                - частное
+                - муниципальное
+                - государственное
+              rooms:
+                type: string
+              family:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - fio
+                  - birth_date
+                  - relation
+                  properties:
+                    fio:
+                      type: string
+                    birth_date:
+                      type: string
+                    relation:
+                      type: string
+              providers:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - name
+                  - account
+                  properties:
+                    name:
+                      type: string
+                    account:
+                      type: string
+              payment:
+                type: object
+                additionalProperties: false
+                required:
+                - method
+                - bank
+                - account
+                properties:
+                  method:
+                    type: string
+                    enum:
+                    - bank
+                    - post
+                  bank:
+                    type: string
+                  account:
+                    type: string
+              missing:
+                type: array
+                items:
+                  type: string
+              confidence:
+                type: number
+                minimum: 0
+                maximum: 1
+              summary_note:
+                type: string
+        structured_output_enabled: true
+        title: Распознавание ЖКУ (recognize)
+        type: llm
+        vision:
+          enabled: true
+          configs:
+            detail: high
+            variable_selector:
+            - sys
+            - files
+      height: 120
+      id: recognize_llm
+      position: {x: 720, y: 600}
+      positionAbsolute: {x: 720, y: 600}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#recognize_llm.text#}}'
+        desc: Возвращает JSON распознавания ЖКУ-заявления микросервису.
+        selected: false
+        title: Ответ (recognize)
+        type: answer
+        variables: []
+      height: 106
+      id: ans_recognize
+      position: {x: 1060, y: 600}
+      positionAbsolute: {x: 1060, y: 600}
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.6

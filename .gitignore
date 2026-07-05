@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+# OS
+.DS_Store
+# Runtime data (databases & logs) — snapshotted separately, noisy in diffs
+microservice/data/*.db
+microservice/data/*.log
