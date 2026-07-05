@@ -73,34 +73,39 @@ class MaxClient:
             body["attachments"] = [self.inline_keyboard(keyboard_rows)]
 
         url = f"{self.base_url}/messages"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            # Сначала пробуем chat_id (групповой чат / диалог с известным chat_id).
-            if chat_id is not None:
-                resp = await client.post(
-                    url, headers=self._headers(),
-                    params={"chat_id": _maybe_int(chat_id)}, json=body,
-                )
-                # В личном диалоге chat_id часто отсутствует и подменяется user_id —
-                # тогда MAX отвечает 400 (нет чата с таким id). Повторяем по user_id.
-                if resp.status_code >= 400 and user_id is not None and str(user_id) != "":
-                    log.warning("MAX send by chat_id=%s failed %s, retry by user_id=%s",
-                                chat_id, resp.status_code, user_id)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                # Сначала пробуем chat_id (групповой чат / диалог с известным chat_id).
+                if chat_id is not None:
+                    resp = await client.post(
+                        url, headers=self._headers(),
+                        params={"chat_id": _maybe_int(chat_id)}, json=body,
+                    )
+                    # В личном диалоге chat_id часто отсутствует и подменяется user_id —
+                    # тогда MAX отвечает 400 (нет чата с таким id). Повторяем по user_id.
+                    if resp.status_code >= 400 and user_id is not None and str(user_id) != "":
+                        log.warning("MAX send by chat_id=%s failed %s, retry by user_id=%s",
+                                    chat_id, resp.status_code, user_id)
+                        resp = await client.post(
+                            url, headers=self._headers(),
+                            params={"user_id": _maybe_int(user_id)}, json=body,
+                        )
+                elif user_id is not None:
                     resp = await client.post(
                         url, headers=self._headers(),
                         params={"user_id": _maybe_int(user_id)}, json=body,
                     )
-            elif user_id is not None:
-                resp = await client.post(
-                    url, headers=self._headers(),
-                    params={"user_id": _maybe_int(user_id)}, json=body,
-                )
-            else:
-                log.error("MAX send_message: не указан ни chat_id, ни user_id")
-                return {"ok": False}
+                else:
+                    log.error("MAX send_message: не указан ни chat_id, ни user_id")
+                    return {"ok": False}
+        except httpx.HTTPError as exc:
+            # Сеть/таймаут: не роняем обработчик апдейта — best-effort, как send_document.
+            log.warning("MAX send_message failed: %s", exc)
+            return {"ok": False}
 
-            if resp.status_code >= 400:
-                log.error("MAX send_message error %s: %s", resp.status_code, resp.text)
-            return _safe_json(resp)
+        if resp.status_code >= 400:
+            log.error("MAX send_message error %s: %s", resp.status_code, resp.text)
+        return _safe_json(resp)
 
     async def send_document(
         self, file_bytes: bytes, filename: str, chat_id: str | int,

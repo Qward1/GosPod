@@ -82,15 +82,14 @@ class DifyClient:
         вида {"answer": str, "found_in_kb": bool, "confidence": number}.
 
         Возвращает нормализованный dict с ключами answer / found_in_kb / confidence.
-        При сбое парсинга считаем, что ответа в БЗ нет (escalate), чтобы вопрос не
-        потерялся — лучше отдать оператору, чем выдать сырой текст без проверки.
+        При любом сбое (не настроен ключ, сетевая ошибка/таймаут, HTTP-ошибка, битый
+        JSON) возвращаем безопасный дефолт `found_in_kb=False` — тогда бот эскалирует
+        вопрос оператору, а не теряет его молча. Тему при сбое считаем релевантной
+        (on_topic=True), чтобы фильтр не отсёк живого человека из-за недоступности Dify.
         """
         if not _configured(self.app_key):
             log.warning("Dify app_key не настроен — вопрос будет передан оператору")
-            return {
-                "answer": "", "found_in_kb": False, "confidence": 0.0,
-                "on_topic": True, "topic_confidence": 0.0,
-            }
+            return _ask_escalation_default()
 
         url = f"{self.base_url}/chat-messages"
         headers = {
@@ -103,15 +102,21 @@ class DifyClient:
             "response_mode": "blocking",
             "user": user_key,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code >= 400:
-                log.error("Dify ask error %s: %s", resp.status_code, resp.text)
-                return {
-                    "answer": "", "found_in_kb": False, "confidence": 0.0,
-                    "on_topic": True, "topic_confidence": 0.0,
-                }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(url, headers=headers, json=body)
+        except httpx.HTTPError as exc:
+            # Сеть/таймаут: не роняем обработчик сообщения — эскалируем оператору.
+            log.error("Dify ask request failed: %s", exc)
+            return _ask_escalation_default()
+        if resp.status_code >= 400:
+            log.error("Dify ask error %s: %s", resp.status_code, resp.text)
+            return _ask_escalation_default()
+        try:
             data = resp.json()
+        except json.JSONDecodeError as exc:
+            log.error("Dify ask returned invalid JSON: %s", exc)
+            return _ask_escalation_default()
 
         raw_answer = data.get("answer", "")
         return _parse_structured(raw_answer)
@@ -353,6 +358,17 @@ class DifyClient:
                 return resp.json()
             except json.JSONDecodeError:
                 return {"_status": resp.status_code, "_text": resp.text}
+
+
+def _ask_escalation_default() -> dict:
+    """Безопасный ответ `ask()` при любом сбое: вопрос уйдёт оператору, не потеряется.
+
+    `found_in_kb=False` → бот эскалирует; `on_topic=True` → тематический фильтр не
+    отсекает человека из-за недоступности Dify (см. MaxBot._handle_user_question)."""
+    return {
+        "answer": "", "found_in_kb": False, "confidence": 0.0,
+        "on_topic": True, "topic_confidence": 0.0,
+    }
 
 
 def _configured(value: str) -> bool:

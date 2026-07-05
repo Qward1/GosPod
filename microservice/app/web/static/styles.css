@@ -335,6 +335,28 @@ body {
 .btn--danger:hover { box-shadow: 0 12px 26px rgba(228,0,43,.42); }
 .btn:disabled { opacity: .55; cursor: default; transform: none; }
 
+/* Доступность: единое кольцо фокуса с КЛАВИАТУРЫ для интерактивных элементов.
+   :focus-visible не срабатывает на клик мышью, поэтому вид для мыши не меняется, а
+   при навигации Tab становится видно, где фокус (раньше кнопки/ссылки/вкладки/пункты
+   меню его вовсе не показывали). Инпуты и селекты рисуют собственное кольцо на :focus —
+   сюда не включены, чтобы не задваивать. */
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.nav__item:focus-visible,
+.theme-toggle:focus-visible,
+.logout-btn:focus-visible,
+.tab:focus-visible,
+.ai-chat-item:focus-visible,
+.usvo-item:focus-visible,
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
 /* ---------- Иконочные кнопки (квадрат со стеклом) ---------- */
 .icon-btn {
   display: grid; place-items: center; flex: 0 0 auto;
