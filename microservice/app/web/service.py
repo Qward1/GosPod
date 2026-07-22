@@ -386,13 +386,14 @@ class WebService:
     def _link_usvo(self, name: str = "", phone: str = "", birth: str = "") -> dict:
         """Определяет связь обращения из MAX с карточкой(ами) УСВО.
 
-        Каскад поиска (ФИО обязательно на КАЖДОМ шаге; берётся первый шаг, давший
-        совпадения):
+        Каскад поиска (берётся первый шаг, давший совпадения; ФИО обязательно на
+        шагах 1–3):
           1) ФИО + телефон + дата рождения;
           2) ФИО + телефон  ИЛИ  ФИО + дата рождения;
-          3) только ФИО.
+          3) только ФИО;
+          4) только телефон (резерв: когда по ФИО не нашлось ни одной карточки).
         (Дата рождения из MAX сейчас недоступна — тогда шаги 1 и «+дата» пусты, и
-        каскад корректно вырождается в ФИО+телефон → ФИО.)
+        каскад корректно вырождается в ФИО+телефон → ФИО → телефон.)
 
         Возвращает {usvo_id, usvo_matches:[{id,name,phone}], usvo_ambiguous,
         link_by}. `link_by` ∈ {"phone","name",""}: если во всех совпадениях
@@ -408,13 +409,16 @@ class WebService:
         def birth_ok(r: UsvoRecord) -> bool:
             return bool(qbirth) and _norm_birth(r.birth_date) == qbirth
 
-        # ФИО — обязательное условие связи на всех шагах каскада.
+        # ФИО — обязательное условие связи на шагах 1–3.
         named = [r for r in self._all_records() if self._name_tokens_match(name, r)]
         matches = [r for r in named if phone_ok(r) and birth_ok(r)]          # 1
         if not matches:
             matches = [r for r in named if phone_ok(r) or birth_ok(r)]       # 2
         if not matches:
             matches = named                                                  # 3
+        if not matches:
+            # Резерв: по ФИО не нашлось — связываем только по телефону.
+            matches = [r for r in self._all_records() if phone_ok(r)]        # 4
 
         if not matches:
             return {"usvo_id": None, "usvo_matches": [], "usvo_ambiguous": False,
