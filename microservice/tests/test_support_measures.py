@@ -447,6 +447,15 @@ class FakeDify:
             del self.docs[k]
         return len(ks)
 
+    async def list_all_documents(self, keyword=None, limit=100):
+        # В этом фейке имя документа служит и его идентификатором.
+        return [{"id": name, "name": name} for name in list(self.docs)
+                if not keyword or keyword in name]
+
+    async def delete_document(self, doc_id):
+        self.docs.pop(doc_id, None)
+        return {"result": "success"}
+
 
 def _webservice(cfg, store, dify):
     from app.max.client import MaxClient
@@ -478,6 +487,36 @@ def test_kb_autosync_idempotent(tmp_path):
     svc.update_support_measure(mid, {"title": "Выплата (ред.)", "active": False})
     asyncio.run(svc.sync_measure_to_kb(mid))
     assert len(dify.docs) == 0
+
+
+def test_sync_measures_kb_purges_orphans(tmp_path):
+    """Полная пересинхронизация удаляет документы-призраки мер, которых нет в БД.
+
+    Регрессия: раньше sync_measures_kb перебирал только меры из БД и не трогал
+    осиротевшие документы «Мера поддержки #N» (после удаления меры или смены id БД),
+    из-за чего ассистент подбора возвращал несуществующий measure_id."""
+    cfg = Config()
+    cfg.dify.measure_templates_dir = str(tmp_path / "tpl")
+    store = Store(str(tmp_path / "state.db"))
+    dify = FakeDify()
+    svc = _webservice(cfg, store, dify)
+
+    mid = svc.create_support_measure({"title": "Питание", "documents": ["Паспорт"]})["measure"]["id"]
+
+    # Документы-призраки в базе знаний: мер с такими id в БД нет.
+    dify.docs["Мера поддержки #404: Удалённая мера"] = "старое"
+    dify.docs["Мера поддержки #405: Ещё одна удалённая"] = "старое"
+    # Посторонний документ (не мера) не должен пострадать.
+    dify.docs["Ответ оператора 2026-01-01 10:00"] = "ответ"
+
+    res = asyncio.run(svc.sync_measures_kb())
+    assert res["ok"] is True
+    assert res["removed_orphans"] == 2
+
+    names = set(dify.docs)
+    assert any(k.startswith(f"Мера поддержки #{mid}:") for k in names)  # активная мера на месте
+    assert not any("#404" in k or "#405" in k for k in names)          # призраки удалены
+    assert "Ответ оператора 2026-01-01 10:00" in names                 # чужой документ цел
 
 
 def test_measure_deactivated_midflow():

@@ -1503,17 +1503,55 @@ class WebService:
         return {"ok": True}
 
     async def sync_measures_kb(self) -> dict:
-        """Полная пересинхронизация всех мер с базой знаний (кнопка «Синхронизировать»)."""
+        """Полная пересинхронизация всех мер с базой знаний (кнопка «Синхронизировать».)
+
+        Помимо создания/обновления документов активных мер УДАЛЯЕТ документы-призраки:
+        меры, которых больше нет в БД (например, удалённые или оставшиеся от прежней
+        БД с другими id). Иначе в базе знаний накапливаются осиротевшие документы
+        «Мера поддержки #N», и ассистент подбора (measure_assistant.yml) возвращает
+        measure_id, которого нет в БД, — предложение меры молча не срабатывает
+        (см. bot_logic: measure по id не находится → оффер не показывается)."""
         if not self.dify.kb_ready():
             return {"ok": False, "error": "База знаний Dify не настроена."}
+        measures = measures_mod.all_measures(self.store)
+        active_ids = {int(m["id"]) for m in measures if m["active"]}
         count = 0
-        for m in measures_mod.all_measures(self.store):
+        for m in measures:
             if m["active"]:
                 await self.sync_measure_to_kb(m["id"])
                 count += 1
             else:
                 await self.remove_measure_from_kb(m["id"])
-        return {"ok": True, "count": count}
+        removed_orphans = await self._purge_orphan_measure_docs(active_ids)
+        return {"ok": True, "count": count, "removed_orphans": removed_orphans}
+
+    async def _purge_orphan_measure_docs(self, keep_ids: set[int]) -> int:
+        """Удаляет из базы знаний документы мер, чьих id нет среди keep_ids.
+
+        Документ меры называется «Мера поддержки #<id>: …»; из имени вынимаем id и
+        удаляем всё, что не относится к текущим активным мерам (best-effort — ошибка
+        по одному документу не срывает пересинхронизацию)."""
+        try:
+            docs = await self.dify.list_all_documents(keyword="Мера поддержки")
+        except Exception:  # noqa: BLE001
+            return 0
+        removed = 0
+        for d in docs:
+            name = d.get("name") or ""
+            match = re.match(r"Мера поддержки #(\d+):", name)
+            if not match:
+                continue
+            if int(match.group(1)) in keep_ids:
+                continue
+            doc_id = d.get("id")
+            if not doc_id:
+                continue
+            try:
+                await self.dify.delete_document(doc_id)
+                removed += 1
+            except Exception:  # noqa: BLE001
+                pass
+        return removed
 
     def meta(self) -> dict:
         web_ai = getattr(self.cfg.web, "ai", None)
