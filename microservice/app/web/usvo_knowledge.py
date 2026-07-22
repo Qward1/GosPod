@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable
 
+from app.common.timez import human_ts, msk_today
 from app.max.dify_client import SINGLE_CHUNK_PROCESS_RULE, DifyClient
 from app.max.store import Store
 from app.web.usvo import UsvoRecord
@@ -92,7 +93,7 @@ def _age(value: str) -> int | None:
     born = _parse_date(value)
     if born is None:
         return None
-    today = dt.date.today()
+    today = msk_today()
     age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
     return age if 0 <= age < 120 else None
 
@@ -218,7 +219,7 @@ class UsvoCardsMetaService:
     def text(self, records: Iterable[UsvoRecord] | None = None) -> str:
         data = self.build(records)
         updated = (
-            dt.datetime.fromtimestamp(data["last_updated"]).strftime("%d.%m.%Y %H:%M")
+            human_ts(data["last_updated"])
             if data["last_updated"] else "не определена"
         )
         flags = Counter(data["flags"])

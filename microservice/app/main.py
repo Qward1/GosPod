@@ -30,6 +30,7 @@ from app.max.dify_client import DifyClient
 from app.max.polling import poll_loop
 from app.max.router import router as max_router
 from app.max.store import Store
+from app.web.admin_router import router as admin_router
 from app.web.ai_chat import AiChatService
 from app.web.ai_chat_router import router as ai_chat_router
 from app.web.measures_router import router as measures_router
@@ -150,16 +151,40 @@ async def lifespan(app: FastAPI):
         poll_task = asyncio.create_task(poll_loop(app.state.bot, max_client))
         logging.getLogger("app").info("Фоновый long polling MAX включён (max.polling=true).")
 
+    # Фоновые SLA-напоминания операторам о просроченных обращениях. Включаются
+    # отдельным флагом (web.sla_reminders_enabled), т.к. шлют сообщения в чат.
+    sla_task = None
+    if cfg.web.enabled and cfg.web.sla_reminders_enabled:
+        sla_task = asyncio.create_task(_sla_reminder_loop(app.state.bot, cfg))
+        logging.getLogger("app").info(
+            "Фоновые SLA-напоминания включены (интервал %d мин).",
+            cfg.web.sla_reminder_interval_minutes,
+        )
+
     logging.getLogger("app").info("Сервис запущен. Конфиг загружен.")
     try:
         yield
     finally:
-        if poll_task is not None:
-            poll_task.cancel()
-            try:
-                await poll_task
-            except asyncio.CancelledError:
-                pass
+        for task in (poll_task, sla_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+
+async def _sla_reminder_loop(bot, cfg) -> None:
+    """Периодически напоминает операторам о просроченных обращениях (best-effort)."""
+    interval = max(1, int(cfg.web.sla_reminder_interval_minutes)) * 60
+    while True:
+        try:
+            await bot.remind_overdue_escalations()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logging.getLogger("app").exception("Сбой SLA-напоминаний")
+        await asyncio.sleep(interval)
 
 
 app = FastAPI(title="Господдержка СВО — микросервис", version="1.0.0", lifespan=lifespan)
@@ -171,12 +196,14 @@ app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(measures_router)
 app.include_router(web_router)
+app.include_router(admin_router)
 app.include_router(ai_chat_router)
 app.include_router(usvo_query_router)
 app.include_router(auth_router, prefix="/application")
 app.include_router(settings_router, prefix="/application")
 app.include_router(measures_router, prefix="/application")
 app.include_router(web_router, prefix="/application")
+app.include_router(admin_router, prefix="/application")
 app.include_router(ai_chat_router, prefix="/application")
 app.include_router(usvo_query_router, prefix="/application")
 

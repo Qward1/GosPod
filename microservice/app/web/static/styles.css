@@ -1556,3 +1556,114 @@ textarea.kb-input { line-height: 1.5; min-height: 130px; }
 @media (prefers-reduced-motion: reduce) {
   .confirm-overlay, .confirm-box { transition: none; }
 }
+
+/* ============================================================
+   ДОРАБОТКИ: SLA, связь с УСВО, рассылки, аудит, импорт (v20260706-2)
+   ============================================================ */
+
+/* Сортировка в шапке списка обращений. */
+.topbar-sort { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.topbar-sort select {
+  padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--glass-strong); color: var(--ink); font: inherit; cursor: pointer;
+}
+
+/* SLA: подсветка просроченной строки + возраст под датой. */
+.appeals-table tr.row--overdue { background: rgba(228, 0, 43, 0.055); }
+.appeals-table tr.row--overdue:hover { background: rgba(228, 0, 43, 0.10); }
+.appeals-table tr.row--overdue td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+.age-sub { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* Связь обращения с карточкой(ами) УСВО по телефону. */
+.usvo-link-block .usvo-link-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.usvo-link {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--glass-strong);
+  color: var(--blue); font: inherit; font-size: 13px; cursor: pointer; text-align: left;
+}
+.usvo-link:hover { border-color: var(--blue); background: var(--blue-050); }
+.usvo-link--inline { padding: 2px 8px; }
+.usvo-link-note {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  background: rgba(31, 157, 87, 0.10); border: 1px solid rgba(31, 157, 87, 0.28);
+  color: var(--ink); font-size: 13px;
+}
+.usvo-link-note svg { color: var(--ok); }
+/* Мягкий вид, когда связь определена лишь по совпадению ФИО (не по телефону) —
+   это предположение, а не подтверждённый матч. */
+.usvo-link-note--soft {
+  background: rgba(214, 158, 46, 0.10); border-color: rgba(214, 158, 46, 0.30);
+}
+.usvo-link-note--soft svg { color: var(--warn, #d69e2e); }
+.usvo-link-how { font-weight: 600; }
+.usvo-link-note--soft .usvo-link-how { color: var(--warn, #d69e2e); }
+
+/* Настройки → регламент SLA. */
+.sla-card { padding: 18px 20px; }
+.sla-card__title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
+.sla-card__title svg { color: var(--accent, var(--blue-400)); }
+.sla-card__sub { margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: var(--muted); max-width: 70ch; }
+.sla-form { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+.sla-form__label { font-size: 13px; color: var(--ink); font-weight: 600; }
+.sla-field {
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--glass-strong);
+  padding-right: 12px; transition: border-color .15s, box-shadow .15s;
+}
+.sla-field:focus-within { border-color: var(--blue-400); box-shadow: 0 0 0 3px var(--blue-050); }
+.sla-field input {
+  width: 68px; border: none; background: transparent; box-shadow: none;
+  padding: 10px 4px 10px 14px; font: inherit; font-size: 15px; font-weight: 700;
+  color: var(--ink); text-align: center; -moz-appearance: textfield;
+}
+.sla-field input:focus { outline: none; box-shadow: none; }
+.sla-field__unit { font-size: 13px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.sla-form__hint { flex-basis: 100%; font-size: 12px; color: var(--muted); margin-top: -2px; }
+
+/* Хронология обращения (события статусов/уведомлений) в панели истории. */
+.ap-events { margin: 12px 0; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--glass-bg); border: 1px solid var(--line); }
+.ap-events__head { display: flex; align-items: center; gap: 6px; font-weight: 700;
+  font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.ap-event { display: grid; grid-template-columns: 12px 1fr auto; align-items: center;
+  gap: 8px; font-size: 12.5px; padding: 3px 0; color: var(--ink); }
+.ap-event__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue-400); }
+.ap-event--answered .ap-event__dot { background: var(--ok); }
+.ap-event--notification .ap-event__dot { background: var(--cyan); }
+.ap-event--sla_reminder .ap-event__dot { background: var(--red); }
+.ap-event__d { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* Рассылки. */
+.bc-card { display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+.bc-targets { display: flex; gap: 12px; flex-wrap: wrap; }
+.bc-target { flex: 1 1 220px; display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--glass-strong); cursor: pointer; }
+.bc-target:hover { border-color: var(--blue-400); }
+.bc-target input { margin-top: 3px; }
+.bc-target span { display: flex; flex-direction: column; }
+.bc-target small { color: var(--muted); font-size: 12px; }
+.bc-result { padding: 12px 14px; border-radius: var(--radius-sm); font-size: 13.5px;
+  border: 1px solid var(--line); background: var(--glass-bg); }
+.bc-result--ok { background: rgba(31, 157, 87, 0.10); border-color: rgba(31, 157, 87, 0.28); }
+.bc-result--warn { background: rgba(217, 138, 0, 0.12); border-color: rgba(217, 138, 0, 0.30); }
+.bc-result--err { background: rgba(228, 0, 43, 0.10); border-color: rgba(228, 0, 43, 0.28); }
+.bc-errors { margin-top: 8px; font-size: 12px; color: var(--muted); max-height: 180px; overflow: auto; }
+
+/* Итог импорта карточек (дедуп-подсказки). */
+.import-stats { display: flex; gap: 10px; margin: 4px 0 12px; }
+.import-stat { flex: 1; text-align: center; padding: 12px; border-radius: var(--radius-sm);
+  background: var(--glass-bg); border: 1px solid var(--line); }
+.import-stat b { display: block; font-size: 22px; color: var(--ink); }
+.import-stat span { font-size: 12px; color: var(--muted); }
+.import-stat--ok b { color: var(--ok); }
+.import-stat--warn b { color: var(--warn); }
+.import-skip { margin-top: 6px; }
+.import-skip__head { display: flex; align-items: center; gap: 6px; font-weight: 700;
+  font-size: 13px; color: var(--warn); margin-bottom: 6px; }
+.import-skip__list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto;
+  display: flex; flex-direction: column; gap: 6px; }
+.import-skip__list li { padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--glass-bg); border: 1px solid var(--line); font-size: 13px; }
+.import-skip__list small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }

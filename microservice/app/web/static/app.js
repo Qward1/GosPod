@@ -31,6 +31,7 @@ const state = {
   aiReady: false,
   appsTab: "list",
   activeUsvo: null,
+  appealsSort: "newest",
 };
 
 function gotoLogin() {
@@ -154,6 +155,7 @@ const ICONS = {
   spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/>',
   filter: '<path d="M4 5h16M7 12h10M10 19h4"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
 function icon(name, size = 18) {
   const p = ICONS[name] || ICONS.info;
@@ -439,19 +441,42 @@ function statusPill(status) {
     : `<span class="pill pill--ok"><span class="pill__dot"></span>Отвечено</span>`;
 }
 
+/* Сортировка списка обращений (в т.ч. по просроченности и возрасту — SLA). */
+const APPEAL_SORTS = {
+  newest: { label: "Сначала новые", fn: (a, b) => (b.created_at || 0) - (a.created_at || 0) },
+  overdue: {
+    label: "Сначала просроченные",
+    fn: (a, b) => (b.is_overdue - a.is_overdue) || ((b.age_days || 0) - (a.age_days || 0)),
+  },
+  oldest: { label: "Сначала старые (по возрасту)", fn: (a, b) => (b.age_days || 0) - (a.age_days || 0) },
+};
+
 async function renderAppeals() {
   const root = $("#view-root");
   root.innerHTML = tableSkeleton();
   setTitle("Обращения", "Вопросы граждан, распределённые на оператора");
+  const sort = state.appealsSort && APPEAL_SORTS[state.appealsSort] ? state.appealsSort : "newest";
+  const sortOpts = Object.entries(APPEAL_SORTS)
+    .map(([k, v]) => `<option value="${k}" ${k === sort ? "selected" : ""}>${esc(v.label)}</option>`).join("");
   $("#topbar-actions").innerHTML = `
+    <label class="topbar-sort"><span>Сортировка</span>
+      <select id="appeals-sort">${sortOpts}</select></label>
+    ${state.isAdmin ? `<button class="btn btn--soft" id="appeals-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
     <a class="btn btn--soft" href="${API}/export/appeals" download>${icon("send")}<span>Экспорт</span></a>
     <button class="btn btn--ghost" id="reload-appeals">${icon("refresh")}<span>Обновить</span></button>`;
   $("#reload-appeals").onclick = renderAppeals;
+  $("#appeals-sort").onchange = (e) => { state.appealsSort = e.target.value; renderAppeals(); };
+  const notifyBtn = $("#appeals-notify");
+  if (notifyBtn) notifyBtn.onclick = openBroadcastModal;
 
   const { items } = await api("/appeals");
   state.appeals = items;
   const open = items.filter((a) => a.status === "open").length;
+  const overdue = items.filter((a) => a.is_overdue).length;
   $("#nav-appeals-count").textContent = open || "";
+  setTitle("Обращения", overdue
+    ? `Вопросы граждан · просрочено: ${overdue} (регламент ${state.meta?.sla_business_days || 3} дн.)`
+    : "Вопросы граждан, распределённые на оператора");
 
   if (!items.length) {
     root.innerHTML = emptyState("Все обращения обработаны, ИИ отдыхает",
@@ -459,23 +484,24 @@ async function renderAppeals() {
     return;
   }
 
-  const rows = items.map((a) => `
-    <tr data-id="${a.id}">
+  const sorted = [...items].sort(APPEAL_SORTS[sort].fn);
+  const rows = sorted.map((a) => `
+    <tr data-id="${a.id}" class="${a.is_overdue ? "row--overdue" : ""}">
       <td class="senti-cell">${sentiDot(a.sentiment)}</td>
       <td class="q">${esc(a.question)}<small>${esc(a.summary || a.citizen.name || "Гражданин")}</small></td>
-      <td>${esc(a.created_human)}</td>
+      <td>${esc(a.created_human)}${a.age ? `<small class="age-sub">возраст: ${esc(a.age)}</small>` : ""}</td>
       <td><span class="pill pill--info">${esc(a.topic)}</span></td>
       <td>${a.assignee
         ? `<span class="assignee-tag"><span class="dot"></span>${esc(a.assignee)}</span>`
         : '<span class="muted">не назначен</span>'}</td>
-      <td>${statusPill(a.status)}</td>
+      <td>${a.is_overdue ? `<span class="pill pill--danger" title="Срок обработки истёк (регламент ${state.meta?.sla_business_days || 3} дн.)"><span class="pill__dot"></span>Просрочено</span> ` : ""}${statusPill(a.status)}</td>
     </tr>`).join("");
 
   root.innerHTML = `
     <div class="fade-in card appeals-card">
       <table class="appeals-table">
         <thead><tr>
-          <th>Тон</th><th>Вопрос · суть</th><th>Дата и время</th><th>Тематика</th><th>Ответственный</th><th>Статус</th>
+          <th>Тон</th><th>Вопрос · суть</th><th>Дата · возраст</th><th>Тематика</th><th>Ответственный</th><th>Статус</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -517,6 +543,34 @@ function renderConfidence(c) {
 const btnLabel = (ico, text, kbd = "") =>
   `${icon(ico)}<span>${text}${kbd ? `<span class="kbd">${kbd}</span>` : ""}</span>`;
 
+/* Связь обращения из MAX с карточкой(ами) УСВО по номеру телефона (задание 7).
+   Один матч — ссылка в подвале карточки; несколько — показываем список, чтобы
+   оператор выбрал нужную (случайно связь не выбираем). */
+function usvoLinkBlock(a) {
+  const matches = a.usvo_matches || [];
+  if (a.usvo_ambiguous && matches.length > 1) {
+    const list = matches.map((m) =>
+      `<button type="button" class="usvo-link" data-usvo="${m.id}">${icon("card", 14)}<span>${esc(m.name || ("Карточка #" + m.id))}${m.phone ? ` · ${esc(m.phone)}` : ""}</span></button>`).join("");
+    return `<div class="hero-banner hero-banner--warn usvo-link-block">${icon("info", 18)}
+      <div><b>Несколько карточек УСВО с этим номером телефона.</b>
+      Связь не выбрана автоматически — выберите нужную карточку:
+      <div class="usvo-link-list">${list}</div></div></div>`;
+  }
+  if (a.usvo_id && matches.length === 1) {
+    // Честно показываем, ПО ЧЕМУ определена связь: телефон — надёжно, ФИО —
+    // предположение (совпали фамилия и имя), которое оператор должен проверить.
+    // Раньше любой матч подписывался «по номеру телефона», из-за чего карточка с
+    // другим телефоном выглядела ложно связанной.
+    const byName = a.link_by === "name";
+    const how = byName
+      ? `<span class="usvo-link-how">по совпадению ФИО — проверьте номер</span>`
+      : `по номеру телефона`;
+    const nm = matches[0].name ? `: <b>${esc(matches[0].name)}</b>` : "";
+    return `<div class="usvo-link-note${byName ? " usvo-link-note--soft" : ""}">${icon("card", 14)} ${byName ? "Возможно, это карточка УСВО" : "Связано с карточкой УСВО"} ${how}${nm} <button type="button" class="usvo-link usvo-link--inline" data-usvo="${a.usvo_id}">открыть ↗</button></div>`;
+  }
+  return "";
+}
+
 function openAppeal(id) {
   const a = state.appeals.find((x) => x.id === id);
   if (!a) return;
@@ -543,6 +597,8 @@ function openAppeal(id) {
         <div class="lbl">Вопрос гражданина</div>
         <div class="txt">${esc(a.question)}</div>
       </div>
+
+      ${usvoLinkBlock(a)}
 
       <div class="form-row">
         <label>Ответственный за ответ</label>
@@ -575,6 +631,17 @@ function openAppeal(id) {
   });
 
   loadAppealHistory(a.id);
+
+  // Переход к связанной карточке УСВО (одиночная ссылка или выбор из нескольких).
+  $$("#drawer-body .usvo-link[data-usvo]").forEach((b) => {
+    b.onclick = () => {
+      const usvoId = +b.dataset.usvo;
+      state.activeUsvo = usvoId;
+      closeDrawer();
+      switchView("cards");
+      setTimeout(() => selectUsvo(usvoId), 80);
+    };
+  });
 
   $("#ap-delete").onclick = async (e) => {
     const btn = e.currentTarget;
@@ -685,6 +752,22 @@ async function loadAppealHistory(appealId) {
         </div>`).join("")
       : `<p class="muted">Это первое обращение гражданина.</p>`;
 
+    // Хронология текущего обращения: создание, ответ, отправленные уведомления.
+    const EV_LABELS = {
+      created: "Обращение создано", answered: "Ответ оператора",
+      notification: "Уведомление гражданину", sla_reminder: "Напоминание о просрочке",
+    };
+    const events = res.events || [];
+    const evHtml = events.length ? `
+      <div class="ap-events">
+        <div class="ap-events__head">${icon("gauge", 13)} Хронология обращения</div>
+        ${events.map((e) => `<div class="ap-event ap-event--${esc(e.kind)}">
+          <span class="ap-event__dot"></span>
+          <span class="ap-event__t">${esc(EV_LABELS[e.kind] || e.kind)}${e.detail ? ` — ${esc(e.detail)}` : ""}</span>
+          <span class="ap-event__d">${esc(e.created_human)}</span>
+        </div>`).join("")}
+      </div>` : "";
+
     box.innerHTML = `
       <div class="ap-history__head">
         ${icon("appeal", 15)}
@@ -692,6 +775,7 @@ async function loadAppealHistory(appealId) {
         <span class="ap-history__count">${others.length}</span>
       </div>
       ${profileLine ? `<div class="ap-history__profile">${profileLine}</div>` : ""}
+      ${evHtml}
       <div class="ahist-list">${rows}</div>`;
   } catch (err) {
     box.innerHTML = `<p class="muted">Не удалось загрузить историю: ${esc(err.message)}</p>`;
@@ -923,15 +1007,48 @@ function openUsvoUpload() {
       }
       const data = await res.json();
       toast(`Загружено карточек: ${data.saved}`, "ok");
-      closeModal();
       state.meta = await api("/meta");
       state.activeUsvo = null;
+      // Обновляем список под модалкой и показываем итог импорта (с дублями).
       renderCards();
+      showImportResult(data);
     } catch (err) {
       go.disabled = false; go.innerHTML = `${icon("send")}<span>Загрузить</span>`;
       toast(err.message, "err");
     }
   });
+}
+
+/* Итог импорта карточек УСВО: сколько загружено, сколько пропущено как дубли и
+   какие именно записи пропущены (с причиной распознавания дубля). */
+function showImportResult(data) {
+  const skipped = data.skipped_details || [];
+  const skippedHtml = skipped.length ? `
+    <div class="import-skip">
+      <div class="import-skip__head">${icon("info", 15)} Пропущены как дубли (${data.skipped})</div>
+      <ul class="import-skip__list">
+        ${skipped.map((s) => `<li>
+          <b>${esc(s.name || "(без ФИО)")}</b>
+          ${s.birth_date ? ` · ${esc(s.birth_date)}` : ""}${s.phone ? ` · ${esc(s.phone)}` : ""}
+          <small>${esc(s.reason || "дубликат")}${(s.matched_by && s.matched_by.length) ? ` (по: ${esc(s.matched_by.join(", "))})` : ""}</small>
+        </li>`).join("")}
+      </ul>
+    </div>` : (data.skipped
+      ? `<p class="muted">Пропущено дублей: ${data.skipped}.</p>`
+      : `<p class="muted">Дублей не найдено — все записи новые.</p>`);
+
+  openModal(`
+    <h3 class="modal__title">Импорт завершён</h3>
+    <div class="import-stats">
+      <div class="import-stat import-stat--ok"><b>${data.saved}</b><span>импортировано</span></div>
+      <div class="import-stat ${data.skipped ? "import-stat--warn" : ""}"><b>${data.skipped}</b><span>пропущено дублей</span></div>
+      <div class="import-stat"><b>${data.total_uploaded ?? "—"}</b><span>всего в базе</span></div>
+    </div>
+    ${skippedHtml}
+    <div class="modal__actions">
+      <button class="btn btn--primary" id="import-done">${icon("send")}<span>Готово</span></button>
+    </div>`);
+  $("#import-done").onclick = closeModal;
 }
 
 async function selectUsvo(id) {
@@ -999,6 +1116,7 @@ async function selectUsvo(id) {
             ${r.call_date ? `<div>Обзвон: <b>${esc(r.call_date)}</b></div>` : ""}
             ${r.birth_date ? `<div>Род.: <b>${esc(r.birth_date)}</b></div>` : ""}
             <div class="usvo-hero__btns">
+              <a class="btn btn--soft btn--sm" href="${API}/usvo/${id}/docx" download title="Скачать карточку в Word для передачи в ведомства">${icon("doc", 14)}<span>Экспорт в DOCX</span></a>
               ${r.source === "uploaded" ? `<button class="btn btn--danger btn--sm" id="usvo-del" title="Удалить загруженную карточку">${icon("trash", 14)}<span>Удалить</span></button>` : ""}
             </div>
           </div>
@@ -1210,6 +1328,7 @@ function aiChatTime(ts) {
   try {
     return new Date(ts * 1000).toLocaleString("ru-RU", {
       day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+      timeZone: "Europe/Moscow",
     });
   } catch (_) { return ""; }
 }
@@ -1552,9 +1671,12 @@ async function renderApplications() {
 
 async function renderApplicationsListPane() {
   $("#topbar-actions").innerHTML = `
+    ${state.isAdmin ? `<button class="btn btn--soft" id="apps-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
     <a class="btn btn--soft" href="${API}/export/applications" download>${icon("send")}<span>Экспорт</span></a>
     <button class="btn btn--ghost" id="reload-apps">${icon("refresh")}<span>Обновить</span></button>`;
   $("#reload-apps").onclick = renderApplications;
+  const notify = $("#apps-notify");
+  if (notify) notify.onclick = openBroadcastModal;
 
   const c = $("#apps-content");
   let items = [];
@@ -2329,7 +2451,7 @@ async function renderSettings() {
   const root = $("#view-root");
   if (!state.isAdmin) { switchView("appeals"); return; }
   root.innerHTML = tableSkeleton();
-  setTitle("Настройки", "Учётные записи сотрудников контакт-центра");
+  setTitle("Настройки", "Регламент обращений и учётные записи сотрудников");
   $("#topbar-actions").innerHTML = `
     <button class="btn btn--ghost" id="reload-emp">${icon("refresh")}<span>Обновить</span></button>
     <button class="btn btn--primary" id="add-emp">${icon("contact")}<span>Добавить сотрудника</span></button>`;
@@ -2337,8 +2459,10 @@ async function renderSettings() {
   $("#add-emp").onclick = () => openEmployeeForm(null);
 
   let items = [];
+  let sla = null;
   try {
     ({ items } = await api("/settings/employees"));
+    sla = await api("/settings/sla").catch(() => null);
   } catch (e) {
     root.innerHTML = emptyState("Не удалось загрузить", e.message);
     return;
@@ -2359,6 +2483,7 @@ async function renderSettings() {
     </tr>`).join("") : "";
 
   root.innerHTML = `
+    ${slaSettingsCard(sla)}
     <div class="fade-in card hero-banner hero-banner--info" style="margin-bottom:14px">
       ${icon("info", 18)}
       <span>Сотрудник входит в кабинет по своему логину и паролю и отвечает на обращения
@@ -2381,6 +2506,58 @@ async function renderSettings() {
     tr.querySelector('[data-act="edit"]').onclick = () => openEmployeeForm(emp);
     tr.querySelector('[data-act="del"]').onclick = () => deleteEmployee(emp);
   });
+
+  bindSlaSettings(sla);
+}
+
+/* Регламент времени ответа на обращения (SLA). Раньше жил только в config.yaml —
+   теперь администратор меняет его прямо в кабинете (значение хранится в БД и
+   имеет приоритет над дефолтом из конфига). */
+function slaSettingsCard(sla) {
+  if (!sla) return "";
+  const days = sla.sla_business_days ?? sla.default_business_days ?? 3;
+  const min = sla.min ?? 1, max = sla.max ?? 30;
+  const def = sla.default_business_days;
+  return `
+    <div class="fade-in card sla-card" style="margin-bottom:14px">
+      <div class="sla-card__title">${icon("clock", 16)} Регламент времени ответа на обращения</div>
+      <div class="sla-card__sub">Обращение считается просроченным, если ответ не дан за указанное число
+        <b>календарных</b> дней (считаются все дни подряд, включая выходные, с момента поступления
+        обращения). Влияет на бейдж «Просрочено», сортировку и напоминания операторам.</div>
+      <form id="sla-form" class="sla-form">
+        <label for="sla-days" class="sla-form__label">Срок ответа</label>
+        <div class="sla-field">
+          <input id="sla-days" type="number" min="${min}" max="${max}" step="1" value="${days}" inputmode="numeric" />
+          <span class="sla-field__unit">дн.</span>
+        </div>
+        <button class="btn btn--primary" type="submit" id="sla-save">Сохранить</button>
+        ${def != null ? `<span class="sla-form__hint">По умолчанию — ${def} дн. Допустимо от ${min} до ${max}.</span>` : ""}
+      </form>
+      <div class="login-error" id="sla-error" hidden></div>
+    </div>`;
+}
+
+function bindSlaSettings(sla) {
+  const form = $("#sla-form");
+  if (!form) return;
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const err = $("#sla-error"); err.hidden = true;
+    const btn = $("#sla-save");
+    const val = parseInt($("#sla-days").value, 10);
+    if (!Number.isFinite(val)) { err.textContent = "Укажите число дней"; err.hidden = false; return; }
+    btn.disabled = true; btn.innerHTML = spinnerBtnHtml("Сохранение…");
+    try {
+      const res = await api("/settings/sla", { method: "PUT", body: JSON.stringify({ sla_business_days: val }) });
+      // Обновляем мету, чтобы бейджи/подписи в «Обращениях» сразу учли новый регламент.
+      state.meta = await api("/meta");
+      toast(`Регламент обновлён: ${res.sla_business_days} дн.`, "ok");
+      renderSettings();
+    } catch (e) {
+      err.textContent = e.message; err.hidden = false;
+      btn.disabled = false; btn.innerHTML = "Сохранить";
+    }
+  };
 }
 
 function openEmployeeForm(emp) {
@@ -2450,6 +2627,150 @@ async function deleteEmployee(emp) {
 }
 
 /* ============================================================
+   РАЗДЕЛ — РАССЫЛКИ (push-уведомления пользователям MAX, только админ)
+   ============================================================ */
+function broadcastFormHtml(audience) {
+  const ready = !!(audience && audience.max_ready);
+  const total = audience ? audience.total : 0;
+  const subs = audience ? audience.subscribers : 0;
+  return `
+    ${ready ? "" : `<div class="kb-warn">${icon("info", 16)}<span>MAX-бот не настроен (<b>max.bot_token</b> в конфиге). Рассылка недоступна.</span></div>`}
+    <div class="bc-targets">
+      <label class="bc-target"><input type="radio" name="bc-target" value="all" checked />
+        <span><b>Все пользователи MAX</b><small><b id="bc-count-all">${total}</b> чел. — все, кто когда-либо писал боту</small></span></label>
+      <label class="bc-target"><input type="radio" name="bc-target" value="subscribers" />
+        <span><b>Только подписчики</b><small><b id="bc-count-subs">${subs}</b> чел. — подписаны на уведомления</small></span></label>
+    </div>
+    <div class="form-row"><label>Текст сообщения</label>
+      <textarea id="bc-text" rows="5" placeholder="Например: Открыт приём заявлений на новую меру поддержки для семей участников СВО…"></textarea></div>
+    <div class="modal__actions">
+      <button class="btn btn--primary" id="bc-send" ${ready ? "" : "disabled"}>${icon("send")}<span>Отправить рассылку</span></button>
+    </div>
+    <div id="bc-result" class="bc-result" hidden></div>`;
+}
+
+function bindBroadcastForm(scope) {
+  const send = $("#bc-send", scope);
+  if (!send) return;
+  send.onclick = async () => {
+    const text = ($("#bc-text", scope).value || "").trim();
+    if (!text) { toast("Введите текст сообщения", "err"); return; }
+    const checked = $$('input[name="bc-target"]', scope).find((r) => r.checked);
+    const target = (checked && checked.value) || "all";
+    if (!(await confirmDialog(
+      target === "subscribers"
+        ? "Сообщение получат все подписанные пользователи бота MAX."
+        : "Сообщение получат ВСЕ пользователи бота MAX.",
+      { title: "Отправить рассылку?", confirmText: "Отправить", danger: false, iconName: "send" }
+    ))) return;
+    const rbox = $("#bc-result", scope);
+    rbox.hidden = false; rbox.className = "bc-result"; rbox.innerHTML = loadingBlock("Отправка сообщений…");
+    send.disabled = true; send.innerHTML = spinnerBtnHtml("Отправка…");
+    try {
+      const r = await api("/broadcast", { method: "POST", body: JSON.stringify({ text, target }) });
+      rbox.className = "bc-result " + (r.failed ? "bc-result--warn" : "bc-result--ok");
+      rbox.innerHTML = `${icon("send", 16)} Доставлено: <b>${r.sent}</b> из ${r.total}. Ошибок: <b>${r.failed}</b>.`
+        + (r.failed ? `<div class="bc-errors">${(r.errors || []).slice(0, 12).map((e) =>
+          `<div>ID ${esc(e.user_id || "—")}: ${esc(e.error)}</div>`).join("")}</div>` : "");
+      // Обновляем счётчики аудитории по факту рассылки: если пользователь отписался,
+      // но админ не рефрешил страницу, число подписчиков теперь станет актуальным.
+      if (r.audience) {
+        const ca = $("#bc-count-all", scope), cs = $("#bc-count-subs", scope);
+        if (ca) ca.textContent = r.audience.total;
+        if (cs) cs.textContent = r.audience.subscribers;
+      }
+      toast(`Рассылка: доставлено ${r.sent}/${r.total}`, r.failed ? "" : "ok");
+    } catch (err) {
+      rbox.className = "bc-result bc-result--err";
+      rbox.innerHTML = `${icon("info", 16)} ${esc(err.message)}`;
+      toast(err.message, "err");
+    } finally {
+      send.disabled = false; send.innerHTML = `${icon("send")}<span>Отправить рассылку</span>`;
+    }
+  };
+}
+
+async function renderBroadcast() {
+  const root = $("#view-root");
+  if (!state.isAdmin) { switchView("appeals"); return; }
+  setTitle("Рассылки", "Push-уведомления пользователям бота MAX");
+  $("#topbar-actions").innerHTML =
+    `<button class="btn btn--ghost" id="reload-bc">${icon("refresh")}<span>Обновить</span></button>`;
+  root.innerHTML = loadingBlock();
+  let audience = { total: 0, subscribers: 0, max_ready: false };
+  try { audience = await api("/broadcast/audience"); } catch (_) {}
+  $("#reload-bc").onclick = renderBroadcast;
+  root.innerHTML = `<div class="fade-in card bc-card">
+    <div class="hero-banner hero-banner--info">${icon("info", 18)}<span>Сообщение придёт пользователям прямо в чат бота MAX.
+    Ошибки доставки отдельным получателям не останавливают рассылку — итог показан внизу.</span></div>
+    ${broadcastFormHtml(audience)}</div>`;
+  bindBroadcastForm(root);
+}
+
+function openBroadcastModal() {
+  openModal(`<h3 class="modal__title">Оповестить пользователей MAX</h3>
+    <div id="bc-modal-body">${loadingBlock()}</div>`);
+  const fill = (a) => {
+    $("#bc-modal-body").innerHTML = broadcastFormHtml(a);
+    bindBroadcastForm($("#modal-body"));
+  };
+  api("/broadcast/audience").then(fill).catch(() =>
+    fill({ total: 0, subscribers: 0, max_ready: false }));
+}
+
+/* ============================================================
+   РАЗДЕЛ — ЖУРНАЛ ДЕЙСТВИЙ (аудит-лог, только админ)
+   ============================================================ */
+const AUDIT_ACTIONS = {
+  answer_appeal: "Ответ на обращение",
+  delete_appeal: "Удаление обращения",
+  update_usvo: "Правка карточки УСВО",
+  delete_usvo: "Удаление карточки УСВО",
+  clear_usvo: "Очистка карточек УСВО",
+  import_usvo: "Импорт карточек УСВО",
+  decide_application: "Решение по заявлению",
+  delete_application: "Удаление заявления",
+  broadcast: "Массовая рассылка",
+};
+
+async function renderAudit() {
+  const root = $("#view-root");
+  if (!state.isAdmin) { switchView("appeals"); return; }
+  root.innerHTML = tableSkeleton();
+  setTitle("Журнал действий", "Аудит действий сотрудников кабинета");
+  $("#topbar-actions").innerHTML =
+    `<button class="btn btn--ghost" id="reload-audit">${icon("refresh")}<span>Обновить</span></button>`;
+  $("#reload-audit").onclick = renderAudit;
+  let items = [];
+  try {
+    ({ items } = await api("/audit"));
+  } catch (e) {
+    root.innerHTML = emptyState("Не удалось загрузить", e.message);
+    return;
+  }
+  if (!items.length) {
+    root.innerHTML = emptyState("Журнал пуст",
+      "Действия операторов (ответы, правки, удаления, рассылки) появятся здесь.", "doc");
+    return;
+  }
+  const rows = items.map((x) => `
+    <tr>
+      <td>${esc(x.at_human)}</td>
+      <td>${esc(x.user_name || x.user_sub || "—")}</td>
+      <td><span class="pill pill--info">${esc(AUDIT_ACTIONS[x.action] || x.action)}</span></td>
+      <td>${esc(x.entity || "")}${x.entity_id ? ` #${esc(x.entity_id)}` : ""}</td>
+      <td class="q">${esc(x.details || "")}</td>
+    </tr>`).join("");
+  root.innerHTML = `
+    <div class="fade-in card appeals-card">
+      <table class="appeals-table">
+        <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+/* ============================================================
    КАРКАС / РОУТИНГ
    ============================================================ */
 const VIEWS = {
@@ -2458,6 +2779,8 @@ const VIEWS = {
   "ai-chat": { title: "Вопрос-ответ по нормативке", render: renderAiChat },
   applications: { title: "Заявления", render: renderApplications },
   analytics: { title: "Аналитика", render: renderAnalytics },
+  broadcast: { title: "Рассылки", render: renderBroadcast, adminOnly: true },
+  audit: { title: "Журнал действий", render: renderAudit, adminOnly: true },
   settings: { title: "Настройки", render: renderSettings, adminOnly: true },
 };
 
@@ -2566,9 +2889,11 @@ async function initUserBox() {
       $("#user-role").textContent = user.role || "";
       $("#user-avatar").textContent = initials(user.name);
     }
-    // Раздел «Настройки» доступен только администратору.
-    const navSettings = $("#nav-settings");
-    if (navSettings) navSettings.hidden = !state.isAdmin;
+    // Админские разделы (Настройки, Рассылки, Журнал действий) видны только админу.
+    ["#nav-settings", "#nav-broadcast", "#nav-audit"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.hidden = !state.isAdmin;
+    });
     // Сотрудник отвечает только от своего имени; администратор может выбирать,
     // от чьего имени отвечать. Имя берём из учётной записи.
     if (user.name && (!state.isAdmin || !state.operator)) state.operator = user.name;

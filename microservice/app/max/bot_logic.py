@@ -23,6 +23,7 @@ from app.max.client import MaxClient
 from app.max.dify_client import DifyClient, _configured as _dify_configured
 from app.max.schedule import find_building, iter_slots
 from app.max.store import Store
+from app.web.sla import sla_fields
 
 log = logging.getLogger("max.bot")
 
@@ -100,7 +101,7 @@ MSG_ASK_QUESTION = "Хорошо, оформление отложено. Нап�
 MSG_FINAL_REGISTERED = (
     "✅ Документ успешно проверен! Заявление заполнено и заявка зарегистрирована.\n\n"
     "Номер заявления: {number}\n\n"
-    "• Регламентный срок рассмотрения: 3 рабочих дня.\n"
+    "• Регламентный срок рассмотрения: 3 дня.\n"
     "• Что дальше: пакет документов направлен в администрацию г.о. Ленинский. "
     "Официальное решение о выделении меры поддержки придёт вам в этот чат "
     "автоматически сразу после подписания.\n\n"
@@ -324,9 +325,19 @@ class MaxBot:
         needs_operator = (not result["found_in_kb"]) or (
             result["confidence"] < self.cfg.max.confidence_threshold
         )
+        log.info(
+            "Решение по вопросу: needs_operator=%s (found_in_kb=%s confidence=%.2f "
+            "threshold=%.2f) text=%r",
+            needs_operator, result["found_in_kb"], result["confidence"],
+            self.cfg.max.confidence_threshold, text[:60],
+        )
 
         if needs_operator:
-            esc_id = self.store.create_escalation(user_id, chat_id, name, username, text)
+            # Телефон гражданина (если уже получен ботом) сохраняем в обращении —
+            # он используется для связи с карточкой УСВО и истории (по MAX ID).
+            urow = self.store.get_user(user_id)
+            phone = (dict(urow).get("phone") or "") if urow else ""
+            esc_id = self.store.create_escalation(user_id, chat_id, name, username, text, phone)
             await self._notify_operators_escalation(esc_id, name, username, text)
             await self.max.send_message(MSG_ESCALATED, chat_id=chat_id, user_id=user_id)
         else:
@@ -1495,6 +1506,72 @@ class MaxBot:
         mid = _msg_mid(res)
         if mid:
             self.store.set_escalation_mid(escalation_id, mid)
+
+    def _sla_business_days(self) -> int:
+        """Регламент ответа (календарных дней, все дни подряд): значение из
+        «Настроек» кабинета (app_settings) приоритетнее дефолта YAML, чтобы
+        напоминания совпадали с тем, что видит оператор в кабинете."""
+        default = int(self.cfg.web.sla_business_days)
+        getter = getattr(self.store, "get_setting", None)
+        if getter is None:
+            return default
+        raw = getter("sla_business_days")
+        if raw is None:
+            return default
+        try:
+            return max(1, min(30, int(raw)))
+        except (TypeError, ValueError):
+            return default
+
+    async def remind_overdue_escalations(self) -> int:
+        """Повторно уведомляет операторов о просроченных (по SLA) обращениях.
+
+        Регламент — заданный админом в «Настройках» (app_settings), иначе дефолт
+        `web.sla_business_days` календарных дней. Каждое обращение напоминается один раз
+        (после отметки `sla_notified_at`), чтобы не спамить чат операторов.
+        Возвращает число отправленных напоминаний. Best-effort — ошибка отправки одному
+        обращению не мешает остальным."""
+        days = self._sla_business_days()
+        sent = 0
+        for row in self.store.list_open_escalations():
+            d = dict(row)
+            if d.get("sla_notified_at"):
+                continue
+            sla = sla_fields(d.get("created_at") or 0, business_days=days,
+                             status=d.get("status") or "open")
+            if not sla["is_overdue"]:
+                continue
+            contact = d.get("user_name") or "пользователь"
+            if d.get("username"):
+                contact += f" (@{d['username']})"
+            text = (
+                f"⏰ Просрочено обращение (#{d['id']})\n\n"
+                f"От: {contact}\n"
+                f"Возраст: {sla['age']} · регламент {days} дн.\n"
+                f"Вопрос: {d.get('question') or ''}\n\n"
+                f"Ответьте «Ответить» или reply-ом на это сообщение."
+            )
+            rows = [[{"text": "Ответить", "payload": json.dumps({"a": "ans", "e": d["id"]})}]]
+            try:
+                res = await self.max.send_message(
+                    text, chat_id=self.operator_chat_id, keyboard_rows=rows
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("Напоминание о просрочке #%s не отправлено", d["id"])
+                continue
+            if isinstance(res, dict) and res.get("ok") is False:
+                continue
+            mid = _msg_mid(res)
+            if mid:
+                self.store.set_escalation_mid(int(d["id"]), mid)
+            self.store.set_escalation_sla_notified(int(d["id"]))
+            self.store.add_escalation_event(
+                int(d["id"]), "sla_reminder", "Напоминание операторам о просрочке SLA"
+            )
+            sent += 1
+        if sent:
+            log.info("SLA-напоминания: отправлено %d просроченных обращений.", sent)
+        return sent
 
 
 def _id(value) -> str:

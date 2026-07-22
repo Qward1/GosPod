@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import random
 
+from app.common.timez import msk_datetime, msk_today
 from app.web.usvo import UsvoRecord
 
 # Учреждения Подмосковья (правдоподобные названия).
@@ -59,7 +60,7 @@ def _health_issue(rec: UsvoRecord) -> bool:
 def build_history(rec: UsvoRecord, real_appeals: list[dict] | None = None) -> list[dict]:
     """Лента событий взаимодействия (новые сверху)."""
     rng = random.Random(rec.id * 7919 + 13)
-    today = dt.date.today()
+    today = msk_today()
     flags = rec.flags or {}
     events: list[dict] = []
 
@@ -172,7 +173,7 @@ def build_history(rec: UsvoRecord, real_appeals: list[dict] | None = None) -> li
         days = 0
         ts = a.get("created_at") or 0
         if ts:
-            d = dt.datetime.fromtimestamp(ts).date()
+            d = msk_datetime(ts).date()
             days = (today - d).days
         events.append({
             "_days": days,

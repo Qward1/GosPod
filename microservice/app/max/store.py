@@ -175,10 +175,47 @@ class Store:
                     updated_at  REAL NOT NULL
                 );
 
+                -- Хронология по обращению гражданина (задание «улучшить логирование»):
+                -- события смены статуса, ответы оператора, отправленные уведомления.
+                -- Не перезаписывается новыми обращениями — append-only по escalation_id.
+                CREATE TABLE IF NOT EXISTS escalation_events (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    escalation_id INTEGER NOT NULL,
+                    kind          TEXT NOT NULL,
+                    detail        TEXT,
+                    created_at    REAL NOT NULL
+                );
+
+                -- Аудит-лог действий оператора (госсектор: нужен надёжный след).
+                -- Пишется best-effort — сбой записи аудита не должен ломать действие.
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_sub   TEXT,
+                    user_name  TEXT,
+                    action     TEXT NOT NULL,
+                    entity     TEXT,
+                    entity_id  TEXT,
+                    details    TEXT,
+                    at         REAL NOT NULL
+                );
+
+                -- Редактируемые администратором настройки кабинета (регламент SLA
+                -- и т.п.). Простое key/value: значение хранится строкой, слой выше
+                -- сам приводит тип и подставляет дефолт из конфига.
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT,
+                    updated_at REAL NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_ai_chats_user_updated
                     ON ai_chats(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_ai_messages_chat_created
                     ON ai_chat_messages(chat_id, created_at ASC, id ASC);
+                CREATE INDEX IF NOT EXISTS idx_escalation_events_esc
+                    ON escalation_events(escalation_id, id ASC);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_at
+                    ON audit_log(at DESC, id DESC);
                 """
             )
             # Миграции для существующих БД (добавленные позже столбцы).
@@ -205,6 +242,10 @@ class Store:
             self._ensure_column(c, "users", "relation", "TEXT")
             self._ensure_column(c, "users", "region_ok", "INTEGER")
             self._ensure_column(c, "users", "locality", "TEXT")
+            # SLA-таймеры обращений: телефон гражданина (для связи с карточкой УСВО и
+            # истории) и отметка о повторном уведомлении операторов о просрочке.
+            self._ensure_column(c, "escalations", "phone", "TEXT")
+            self._ensure_column(c, "escalations", "sla_notified_at", "REAL")
 
     @staticmethod
     def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
@@ -231,6 +272,22 @@ class Store:
     def get_user(self, user_id: str) -> sqlite3.Row | None:
         with self._conn() as c:
             return c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+
+    def list_users(self, subscribed_only: bool = False, limit: int = 100000) -> list[sqlite3.Row]:
+        """Пользователи MAX для рассылок.
+
+        subscribed_only=True — только подписанные на уведомления (users.subscribed=1).
+        Иначе — все, кто когда-либо писал боту (есть строка в users)."""
+        with self._conn() as c:
+            self._ensure_column(c, "users", "subscribed", "INTEGER NOT NULL DEFAULT 0")
+            if subscribed_only:
+                return c.execute(
+                    "SELECT * FROM users WHERE subscribed = 1 ORDER BY user_id LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return c.execute(
+                "SELECT * FROM users ORDER BY user_id LIMIT ?", (limit,)
+            ).fetchall()
 
     def add_question(self, user_id: str, text: str) -> int:
         """Сохраняет вопрос и инкрементит счётчики.
@@ -364,18 +421,29 @@ class Store:
     # ---- escalations -------------------------------------------------------
 
     def create_escalation(
-        self, user_id: str, user_chat_id: str, user_name: str, username: str, question: str
+        self, user_id: str, user_chat_id: str, user_name: str, username: str, question: str,
+        phone: str = "",
     ) -> int:
+        now = time.time()
         with self._conn() as c:
+            self._ensure_column(c, "escalations", "phone", "TEXT")
             cur = c.execute(
                 """
                 INSERT INTO escalations
-                    (user_id, user_chat_id, user_name, username, question, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'open', ?)
+                    (user_id, user_chat_id, user_name, username, question, status,
+                     phone, created_at)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
-                (user_id, user_chat_id, user_name, username, question, time.time()),
+                (user_id, user_chat_id, user_name, username, question, phone, now),
             )
-            return int(cur.lastrowid)
+            esc_id = int(cur.lastrowid)
+            # Стартовое событие хронологии обращения.
+            c.execute(
+                "INSERT INTO escalation_events (escalation_id, kind, detail, created_at) "
+                "VALUES (?, 'created', ?, ?)",
+                (esc_id, "Обращение создано", now),
+            )
+            return esc_id
 
     def get_escalation(self, escalation_id: int) -> sqlite3.Row | None:
         with self._conn() as c:
@@ -677,6 +745,7 @@ class Store:
 
     def set_escalation_answer(self, escalation_id: int, answer: str, assignee: str = "") -> None:
         """Сохраняет ответ оператора, данный из веб-кабинета, и закрывает обращение."""
+        now = time.time()
         with self._conn() as c:
             self._ensure_column(c, "escalations", "answer", "TEXT")
             self._ensure_column(c, "escalations", "answered_at", "REAL")
@@ -685,19 +754,64 @@ class Store:
                 c.execute(
                     "UPDATE escalations SET answer = ?, answered_at = ?, status = 'answered', "
                     "assignee = ? WHERE id = ?",
-                    (answer, time.time(), assignee, escalation_id),
+                    (answer, now, assignee, escalation_id),
                 )
             else:
                 c.execute(
                     "UPDATE escalations SET answer = ?, answered_at = ?, status = 'answered' "
                     "WHERE id = ?",
-                    (answer, time.time(), escalation_id),
+                    (answer, now, escalation_id),
                 )
+            detail = "Ответ оператора" + (f" ({assignee})" if assignee else "")
+            c.execute(
+                "INSERT INTO escalation_events (escalation_id, kind, detail, created_at) "
+                "VALUES (?, 'answered', ?, ?)",
+                (escalation_id, detail, now),
+            )
+
+    # ---- хронология и SLA обращений ---------------------------------------
+
+    def add_escalation_event(self, escalation_id: int, kind: str, detail: str = "") -> None:
+        """Добавляет событие в хронологию обращения (append-only).
+
+        Используется для фиксации смены статуса и отправленных гражданину
+        уведомлений. Не бросает при отсутствии обращения."""
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO escalation_events (escalation_id, kind, detail, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (escalation_id, kind, detail, time.time()),
+            )
+
+    def list_escalation_events(self, escalation_id: int) -> list[sqlite3.Row]:
+        with self._conn() as c:
+            return c.execute(
+                "SELECT * FROM escalation_events WHERE escalation_id = ? ORDER BY id ASC",
+                (escalation_id,),
+            ).fetchall()
+
+    def list_open_escalations(self, limit: int = 1000) -> list[sqlite3.Row]:
+        """Необработанные обращения (status='open') — для SLA-напоминаний."""
+        with self._conn() as c:
+            return c.execute(
+                "SELECT * FROM escalations WHERE status = 'open' ORDER BY id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+    def set_escalation_sla_notified(self, escalation_id: int, ts: float | None = None) -> None:
+        """Отмечает, что операторам уже отправлено напоминание о просрочке."""
+        with self._conn() as c:
+            self._ensure_column(c, "escalations", "sla_notified_at", "REAL")
+            c.execute(
+                "UPDATE escalations SET sla_notified_at = ? WHERE id = ?",
+                (ts if ts is not None else time.time(), escalation_id),
+            )
 
     def delete_escalation(self, escalation_id: int) -> bool:
-        """Удаляет обращение оператора из веб-кабинета."""
+        """Удаляет обращение оператора из веб-кабинета (вместе с его хронологией)."""
         with self._conn() as c:
             c.execute("DELETE FROM operator_state WHERE escalation_id = ?", (escalation_id,))
+            c.execute("DELETE FROM escalation_events WHERE escalation_id = ?", (escalation_id,))
             cur = c.execute("DELETE FROM escalations WHERE id = ?", (escalation_id,))
             return cur.rowcount > 0
 
@@ -928,3 +1042,61 @@ class Store:
         with self._conn() as c:
             cur = c.execute("DELETE FROM usvo_cards")
             return cur.rowcount
+
+    # ---- аудит-лог действий оператора --------------------------------------
+
+    def add_audit_log(
+        self, action: str, *, user_sub: str = "", user_name: str = "",
+        entity: str = "", entity_id: str = "", details: str = "",
+    ) -> int:
+        """Пишет запись аудита. Вызывающий оборачивает вызов в try/except —
+        сбой аудита не должен ломать основное действие."""
+        with self._conn() as c:
+            cur = c.execute(
+                """
+                INSERT INTO audit_log
+                    (user_sub, user_name, action, entity, entity_id, details, at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_sub, user_name, action, entity, str(entity_id), details, time.time()),
+            )
+            return int(cur.lastrowid)
+
+    def list_audit_log(
+        self, limit: int = 500, entity: str = "", action: str = ""
+    ) -> list[sqlite3.Row]:
+        clauses: list[str] = []
+        params: list = []
+        if entity:
+            clauses.append("entity = ?"); params.append(entity)
+        if action:
+            clauses.append("action = ?"); params.append(action)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self._conn() as c:
+            return c.execute(
+                f"SELECT * FROM audit_log{where} ORDER BY id DESC LIMIT ?", params
+            ).fetchall()
+
+    # ---- настройки кабинета (key/value) -----------------------------------
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Значение настройки (строкой) или default, если не задана."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row is not None else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, str(value), time.time()),
+            )

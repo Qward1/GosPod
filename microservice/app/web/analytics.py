@@ -13,6 +13,7 @@ import datetime as dt
 import time
 from collections import Counter
 
+from app.common.timez import msk_datetime, msk_today
 from app.web.topics import classify_topic
 from app.web.usvo import UsvoRecord
 
@@ -125,10 +126,10 @@ def _period_counts(timestamps: list[float]) -> dict:
 
 def _trend(timestamps: list[float], days: int = 14) -> list[dict]:
     """Динамика обращений по дням за последние N дней (для мини-графика)."""
-    today = dt.date.today()
+    today = msk_today()
     buckets = {today - dt.timedelta(days=i): 0 for i in range(days)}
     for t in timestamps:
-        d = dt.datetime.fromtimestamp(t).date()
+        d = msk_datetime(t).date()
         if d in buckets:
             buckets[d] += 1
     ordered = sorted(buckets.items())

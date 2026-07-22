@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from datetime import date
 
 from app.common.docx import Paragraph, Table, build_docx
+from app.common.timez import msk_today
 from app.max.dify_client import DifyApiError, DifyClient
 from app.max.store import Store
 from app.web.usvo import UsvoRecord
@@ -422,7 +422,7 @@ class AiChatService:
         ) or "История пуста."
         format_instruction = FORMAT_PROMPTS[answer_type].replace(
             "{вопрос пользователя}", question
-        ).replace("{today}", date.today().strftime("%d.%m.%Y"))
+        ).replace("{today}", msk_today().strftime("%d.%m.%Y"))
         exact_block = (
             f"Точные данные по всей базе (по всем карточкам):\n"
             f"{query_context}\n\n"
@@ -483,7 +483,7 @@ class AiChatService:
         ) or "История пуста."
         format_instruction = FORMAT_PROMPTS[answer_type].replace(
             "{вопрос пользователя}", question
-        ).replace("{today}", date.today().strftime("%d.%m.%Y"))
+        ).replace("{today}", msk_today().strftime("%d.%m.%Y"))
         return (
             f"Текущий вопрос пользователя:\n{question}\n\n"
             f"Выбранный тип ответа: {ANSWER_TYPES[answer_type]}\n\n"

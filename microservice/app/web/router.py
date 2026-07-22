@@ -80,18 +80,20 @@ async def appeal_history(request: Request, appeal_id: str) -> dict:
 
 
 @router.post("/appeals/{appeal_id}/answer")
-async def answer(request: Request, appeal_id: str, body: AnswerBody) -> dict:
+async def answer(request: Request, appeal_id: str, body: AnswerBody,
+                 user: dict = Depends(require_user)) -> dict:
     if not body.answer.strip():
         raise HTTPException(status_code=400, detail="Пустой ответ")
-    res = await _svc(request).answer(appeal_id, body.answer, body.assignee)
+    res = await _svc(request).answer(appeal_id, body.answer, body.assignee, actor=user)
     if res.get("error") == "not_found":
         raise HTTPException(status_code=404, detail="Обращение не найдено")
     return res
 
 
 @router.delete("/appeals/{appeal_id}")
-async def delete_appeal(request: Request, appeal_id: str) -> dict:
-    res = _svc(request).delete_appeal(appeal_id)
+async def delete_appeal(request: Request, appeal_id: str,
+                        user: dict = Depends(require_user)) -> dict:
+    res = _svc(request).delete_appeal(appeal_id, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail="Обращение не найдено")
     return res
@@ -132,19 +134,20 @@ async def usvo_template(request: Request) -> Response:
 
 
 @router.post("/usvo/import")
-async def usvo_import(request: Request, file: UploadFile = File(...), replace: bool = False) -> dict:
+async def usvo_import(request: Request, file: UploadFile = File(...), replace: bool = False,
+                     user: dict = Depends(require_user)) -> dict:
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Пустой файл")
-    res = await _svc(request).import_usvo(raw, replace=replace)
+    res = await _svc(request).import_usvo(raw, replace=replace, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error") or "Ошибка импорта")
     return res
 
 
 @router.post("/usvo/clear")
-async def usvo_clear(request: Request) -> dict:
-    return await _svc(request).clear_uploaded_usvo()
+async def usvo_clear(request: Request, user: dict = Depends(require_user)) -> dict:
+    return await _svc(request).clear_uploaded_usvo(actor=user)
 
 
 @router.get("/usvo/{rec_id}")
@@ -161,8 +164,9 @@ class UsvoEditBody(BaseModel):
 
 
 @router.put("/usvo/{rec_id}")
-async def usvo_update(request: Request, rec_id: int, body: UsvoEditBody) -> dict:
-    res = await _svc(request).update_usvo(rec_id, body.fields, body.history_raw)
+async def usvo_update(request: Request, rec_id: int, body: UsvoEditBody,
+                     user: dict = Depends(require_user)) -> dict:
+    res = await _svc(request).update_usvo(rec_id, body.fields, body.history_raw, actor=user)
     if res.get("error") == "not_found":
         raise HTTPException(status_code=404, detail="Карточка не найдена")
     if not res.get("ok"):
@@ -171,11 +175,25 @@ async def usvo_update(request: Request, rec_id: int, body: UsvoEditBody) -> dict
 
 
 @router.delete("/usvo/{rec_id}")
-async def usvo_delete(request: Request, rec_id: int) -> dict:
-    res = await _svc(request).delete_usvo(rec_id)
+async def usvo_delete(request: Request, rec_id: int,
+                     user: dict = Depends(require_user)) -> dict:
+    res = await _svc(request).delete_usvo(rec_id, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error") or "Не удалось удалить")
     return res
+
+
+@router.get("/usvo/{rec_id}/docx")
+async def usvo_docx(request: Request, rec_id: int) -> Response:
+    """Выгрузка одной карточки УСВО в .docx (передача в ведомства)."""
+    data = _svc(request).usvo_card_docx(rec_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="usvo-card-{rec_id}.docx"'},
+    )
 
 
 @router.get("/usvo/{rec_id}/suggestions")
@@ -206,24 +224,27 @@ async def application(request: Request, application_id: int) -> dict:
 
 
 @router.post("/applications/{application_id}/approve")
-async def approve_application(request: Request, application_id: int, body: DecisionBody) -> dict:
-    res = _svc(request).decide_application(application_id, "approved", body.operator)
+async def approve_application(request: Request, application_id: int, body: DecisionBody,
+                             user: dict = Depends(require_user)) -> dict:
+    res = _svc(request).decide_application(application_id, "approved", body.operator, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail="Заявление не найдено")
     return res
 
 
 @router.post("/applications/{application_id}/reject")
-async def reject_application(request: Request, application_id: int, body: DecisionBody) -> dict:
-    res = _svc(request).decide_application(application_id, "rejected", body.operator)
+async def reject_application(request: Request, application_id: int, body: DecisionBody,
+                            user: dict = Depends(require_user)) -> dict:
+    res = _svc(request).decide_application(application_id, "rejected", body.operator, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail="Заявление не найдено")
     return res
 
 
 @router.delete("/applications/{application_id}")
-async def delete_application(request: Request, application_id: int) -> dict:
-    res = _svc(request).delete_application(application_id)
+async def delete_application(request: Request, application_id: int,
+                            user: dict = Depends(require_user)) -> dict:
+    res = _svc(request).delete_application(application_id, actor=user)
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail="Заявление не найдено")
     return res

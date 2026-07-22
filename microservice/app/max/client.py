@@ -103,9 +103,18 @@ class MaxClient:
             log.warning("MAX send_message failed: %s", exc)
             return {"ok": False}
 
+        result = _safe_json(resp)
+        # Проставляем надёжный флаг ok (для рассылок нужно точно знать, доставлено ли
+        # сообщение). Тело ответа сохраняем — из него извлекается mid.
         if resp.status_code >= 400:
             log.error("MAX send_message error %s: %s", resp.status_code, resp.text)
-        return _safe_json(resp)
+            if isinstance(result, dict):
+                result["ok"] = False
+            else:
+                result = {"ok": False}
+        elif isinstance(result, dict):
+            result.setdefault("ok", True)
+        return result
 
     async def send_document(
         self, file_bytes: bytes, filename: str, chat_id: str | int,

@@ -1,9 +1,50 @@
-# Python
+# ── Python ──
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .pytest_cache/
-# OS
+.venv/
+venv/
+
+# ── OS / editor / tooling ──
 .DS_Store
-# Runtime data (databases & logs) — snapshotted separately, noisy in diffs
+Thumbs.db
+*.lnk
+.idea/
+.vscode/
+.claude/
+.agents/
+.codex/
+
+# ── Local config & secrets (публикуется только config.example.yaml) ──
+config.yaml
+.env
+*.env
+
+# ── Runtime data: базы, логи, шаблоны мер (создаются в рантайме) ──
 microservice/data/*.db
 microservice/data/*.log
+microservice/data/measure_templates/
+
+# ── Документация и заметки: в репозитории только корневой README.md ──
+# (остальные .md остаются на диске, но не публикуются; history_styles.md —
+#  рабочие данные приложения, поэтому явно возвращается)
+*.md
+!/README.md
+!microservice/data/history_styles.md
+
+# ── Локальные бэкапы, отчёты, черновики, образцы (на диске, не в репозитории) ──
+_backup/
+_backups/
+INFO/
+Отчёт/
+медали/
+прочее/
+template/
+microservice/ai_prompts.txt
+microservice/maxdbg_users.py
+dify/Ассистент Цифровой Офис.yml
+
+# ── Локальные data-файлы и архивы ──
+*.xlsx
+*.zip

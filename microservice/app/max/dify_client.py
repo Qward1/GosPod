@@ -119,7 +119,17 @@ class DifyClient:
             return _ask_escalation_default()
 
         raw_answer = data.get("answer", "")
-        return _parse_structured(raw_answer)
+        parsed = _parse_structured(raw_answer)
+        # Диагностика: видно, что именно вернула MAX-ветка и как это распозналось.
+        # Если found_in_kb=False из-за того, что answer-узел отдал не JSON —
+        # видно по raw (в нём будет текст ответа, а не {...}).
+        log.info(
+            "Dify ask: parsed found_in_kb=%s confidence=%.2f on_topic=%s "
+            "topic_confidence=%.2f | raw_answer=%r",
+            parsed["found_in_kb"], parsed["confidence"], parsed["on_topic"],
+            parsed["topic_confidence"], (raw_answer or "")[:300],
+        )
+        return parsed
 
     def app_ready(self) -> bool:
         return _configured(self.app_key)
