@@ -50,6 +50,7 @@ class FakeDify:
         self.answer = answer
         self.docs: dict[str, str] = {}
         self.calls: list[dict] = []
+        self.add_document_calls = 0
 
     def app_ready(self):
         return True
@@ -62,10 +63,11 @@ class FakeDify:
         return {"answer": self.answer, "message_id": "m1", "conversation_id": "c1"}
 
     async def add_document_text(self, name, text, **_kwargs):
+        self.add_document_calls += 1
         self.docs[name] = text
         return {"document": {"id": name}}
 
-    async def upsert_document_text(self, name, text, match_prefix=None):
+    async def upsert_document_text(self, name, text, match_prefix=None, **_kwargs):
         if match_prefix:
             for old in [key for key in self.docs if key.startswith(match_prefix) and key != name]:
                 del self.docs[old]
@@ -156,6 +158,69 @@ def test_knowledge_rebuild_is_idempotent(tmp_path):
     assert second == {"ok": True, "count": 1}
     assert len([name for name in dify.docs if name.startswith("Карточка УСВО #")]) == 1
     assert META_DOC_PREFIX in dify.docs
+
+
+class FakeUsvoTableStore:
+    """Табличный источник карточек (аналог UsvoStore) для теста delete_usvo."""
+
+    def __init__(self, records):
+        self._records = list(records)
+
+    def all(self):
+        return list(self._records)
+
+    def get(self, rec_id):
+        return next((r for r in self._records if r.id == rec_id), None)
+
+
+def test_delete_usvo_reveals_table_card_without_full_rebuild(tmp_path):
+    """Удаление оверрайда точечно правит базу знаний, а не пересобирает её целиком.
+
+    Регрессия: раньше delete_usvo всегда делал knowledge.rebuild() — удалял и заново
+    заливал ВСЕ документы датасета. Правка табличной карточки #1 создаёт оверрайд в БД
+    (табличная версия скрывается и её документ убирается из KB); после удаления
+    оверрайда табличная карточка #1 снова видна и должна получить документ обратно —
+    но точечно (upsert), без единого вызова add_document_text (это и есть признак
+    полной пересборки датасета)."""
+    from app.config import Config
+    from app.max.client import MaxClient
+    from app.web.service import WebService
+    from app.web.usvo_db import USVO_DB_ID_BASE
+
+    store = Store(str(tmp_path / "state.db"))
+    usvo_table = FakeUsvoTableStore([_record(1)])
+    cfg = Config()
+    web = WebService(cfg, store, usvo_table, FakeDify(), MaxClient(cfg.max.api_base_url, ""), None)
+
+    kb_dify = FakeDify()
+    meta = UsvoCardsMetaService(web.all_usvo_records, lambda: 1_750_000_000)
+    knowledge = UsvoCardKnowledgeSyncService(store, kb_dify, web.all_usvo_records, meta)
+    web.attach_usvo_knowledge(knowledge)
+
+    fields = [
+        {"label": "ФИО УСВО", "value": "Иванов Иван Иванович"},
+        {"label": "Дата рождения", "value": "14.07.1987"},
+        {"label": "Телефон", "value": "+7 900 000-00-02"},
+        {"label": "Статус", "value": "ветеран боевых действий"},
+    ]
+    edited = asyncio.run(web.update_usvo(1, fields))
+    assert edited["ok"] is True
+    override_id = edited["id"]
+    assert override_id == USVO_DB_ID_BASE + 1
+
+    card_docs = {k for k in kb_dify.docs if k.startswith("Карточка УСВО #")}
+    assert card_docs == {f"Карточка УСВО #{override_id}: Иванов Иван Иванович"}
+
+    kb_dify.add_document_calls = 0
+
+    deleted = asyncio.run(web.delete_usvo(override_id))
+    assert deleted["ok"] is True
+    assert deleted["knowledge_sync"]["ok"] is True
+
+    card_docs_after = {k for k in kb_dify.docs if k.startswith("Карточка УСВО #")}
+    assert card_docs_after == {"Карточка УСВО #1: Иванов Иван Иванович"}
+    # Полной пересборки не было — ни одного add_document_text (только точечный upsert).
+    assert kb_dify.add_document_calls == 0
 
 
 def test_send_message_saves_history_type_and_links(tmp_path):

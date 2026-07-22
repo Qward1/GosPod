@@ -984,18 +984,34 @@ class WebService:
     async def delete_usvo(self, rec_id: int, actor: dict | None = None) -> dict:
         if not is_db_id(rec_id):
             return {"ok": False, "error": "Табличные карточки удалять нельзя — только загруженные."}
-        # ФИО удаляемой карточки читаем ДО удаления — чтобы в аудите (колонка «Детали»)
-        # было видно, какую именно карточку удалили, а не пустое значение.
+        # ФИО и идентичность удаляемой карточки читаем ДО удаления — ФИО нужно для
+        # аудита, идентичность — чтобы понять, не «откроется» ли снова табличная
+        # карточка, которую этот оверрайд перекрывал (см. ниже).
         row = self.store.get_usvo_card(rec_id - USVO_DB_ID_BASE)
         name = (dict(row).get("name") or "").strip() if row else ""
+        deleted_record = self.usvo_db.get(rec_id)
         ok = self.store.delete_usvo_card(rec_id - USVO_DB_ID_BASE)
         if not ok:
             return {"ok": False}
         self._audit("delete_usvo", actor=actor, entity="usvo_card", entity_id=rec_id,
                     details=f"Удалена карточка «{name}»" if name else "Удалена карточка УСВО")
-        # После удаления оверрайда может снова проявиться одноимённая карточка из
-        # основной Excel-таблицы, поэтому безопаснее пересобрать весь набор.
-        knowledge_sync = await self._sync_usvo_knowledge(rebuild=True)
+        # Удаление оверрайда может «открыть» одноимённую карточку из основной
+        # Excel-таблицы (она была скрыта дедупом в _all_records, пока существовал
+        # оверрайд, и поэтому никогда не индексировалась). Вместо полной пересборки
+        # всего датасета точечно синхронизируем только её (если она правда открылась)
+        # и удаляем документ самой удалённой карточки.
+        revealed_ids: list[int] = []
+        if deleted_record is not None:
+            ident = record_identity(deleted_record)
+            if ident:
+                still_hidden_by = {record_identity(r) for r in self.usvo_db.all()}
+                revealed_ids = [
+                    r.id for r in self.usvo.all()
+                    if record_identity(r) == ident and ident not in still_hidden_by
+                ]
+        knowledge_sync = await self._sync_usvo_knowledge(
+            card_ids=revealed_ids, removed_ids=[rec_id]
+        )
         return {"ok": True, "knowledge_sync": knowledge_sync}
 
     async def clear_uploaded_usvo(self, actor: dict | None = None) -> dict:
