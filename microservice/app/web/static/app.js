@@ -451,23 +451,56 @@ const APPEAL_SORTS = {
   oldest: { label: "Сначала старые (по возрасту)", fn: (a, b) => (b.age_days || 0) - (a.age_days || 0) },
 };
 
-async function renderAppeals() {
+/* Одна строка списка обращений. */
+function appealRowHtml(a) {
+  return `
+    <tr data-id="${a.id}" class="${a.is_overdue ? "row--overdue" : ""}">
+      <td class="senti-cell">${sentiDot(a.sentiment)}</td>
+      <td class="q">${esc(a.question)}<small>${esc(a.summary || a.citizen.name || "Гражданин")}</small></td>
+      <td>${esc(a.created_human)}${a.age ? `<small class="age-sub">возраст: ${esc(a.age)}</small>` : ""}</td>
+      <td><span class="pill pill--info">${esc(a.topic)}</span></td>
+      <td>${a.assignee
+        ? `<span class="assignee-tag"><span class="dot"></span>${esc(a.assignee)}</span>`
+        : '<span class="muted">не назначен</span>'}</td>
+      <td>${a.is_overdue ? `<span class="pill pill--danger" title="Срок обработки истёк (регламент ${state.meta?.sla_business_days || 3} дн.)"><span class="pill__dot"></span>Просрочено</span> ` : ""}${statusPill(a.status)}</td>
+    </tr>`;
+}
+
+/* Сигнатура значимого состояния списка — чтобы тихое автообновление не трогало
+   DOM (и не «дёргало» интерфейс), пока реально ничего не изменилось. */
+function appealsSignature(items, sort) {
+  return sort + "|" + items.map((a) =>
+    `${a.id}:${a.status}:${a.assignee || ""}:${a.is_overdue ? 1 : 0}`).join(",");
+}
+
+function bindAppealRows() {
+  $$("#view-root tbody tr").forEach((tr) =>
+    tr.addEventListener("click", () => openAppeal(tr.dataset.id)));
+}
+
+/* `opts.silent` — фоновое автообновление: без скелетона-заглушки и без перестройки
+   шапки; DOM меняется только если данные реально изменились (мягкая замена строк
+   таблицы). Это убирает периодическое «дёрганье» списка каждые 15 секунд. */
+async function renderAppeals(opts = {}) {
+  const silent = opts && opts.silent === true;
   const root = $("#view-root");
-  root.innerHTML = tableSkeleton();
-  setTitle("Обращения", "Вопросы граждан, распределённые на оператора");
   const sort = state.appealsSort && APPEAL_SORTS[state.appealsSort] ? state.appealsSort : "newest";
-  const sortOpts = Object.entries(APPEAL_SORTS)
-    .map(([k, v]) => `<option value="${k}" ${k === sort ? "selected" : ""}>${esc(v.label)}</option>`).join("");
-  $("#topbar-actions").innerHTML = `
-    <label class="topbar-sort"><span>Сортировка</span>
-      <select id="appeals-sort">${sortOpts}</select></label>
-    ${state.isAdmin ? `<button class="btn btn--soft" id="appeals-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
-    <a class="btn btn--soft" href="${API}/export/appeals" download>${icon("send")}<span>Экспорт</span></a>
-    <button class="btn btn--ghost" id="reload-appeals">${icon("refresh")}<span>Обновить</span></button>`;
-  $("#reload-appeals").onclick = renderAppeals;
-  $("#appeals-sort").onchange = (e) => { state.appealsSort = e.target.value; renderAppeals(); };
-  const notifyBtn = $("#appeals-notify");
-  if (notifyBtn) notifyBtn.onclick = openBroadcastModal;
+  if (!silent) {
+    root.innerHTML = tableSkeleton();
+    setTitle("Обращения", "Вопросы граждан, распределённые на оператора");
+    const sortOpts = Object.entries(APPEAL_SORTS)
+      .map(([k, v]) => `<option value="${k}" ${k === sort ? "selected" : ""}>${esc(v.label)}</option>`).join("");
+    $("#topbar-actions").innerHTML = `
+      <label class="topbar-sort"><span>Сортировка</span>
+        <select id="appeals-sort">${sortOpts}</select></label>
+      ${state.isAdmin ? `<button class="btn btn--soft" id="appeals-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
+      <a class="btn btn--soft" href="${API}/export/appeals" download>${icon("send")}<span>Экспорт</span></a>
+      <button class="btn btn--ghost" id="reload-appeals">${icon("refresh")}<span>Обновить</span></button>`;
+    $("#reload-appeals").onclick = () => renderAppeals();
+    $("#appeals-sort").onchange = (e) => { state.appealsSort = e.target.value; renderAppeals(); };
+    const notifyBtn = $("#appeals-notify");
+    if (notifyBtn) notifyBtn.onclick = openBroadcastModal;
+  }
 
   const { items } = await api("/appeals");
   state.appeals = items;
@@ -479,36 +512,33 @@ async function renderAppeals() {
     : "Вопросы граждан, распределённые на оператора");
 
   if (!items.length) {
+    if (silent && !$("#view-root .appeals-table")) return; // уже пусто — не трогаем DOM
     root.innerHTML = emptyState("Все обращения обработаны, ИИ отдыхает",
       "Новые вопросы граждан из бота MAX появятся здесь автоматически.", "robot");
+    state._appealsSig = "";
     return;
   }
 
-  const sorted = [...items].sort(APPEAL_SORTS[sort].fn);
-  const rows = sorted.map((a) => `
-    <tr data-id="${a.id}" class="${a.is_overdue ? "row--overdue" : ""}">
-      <td class="senti-cell">${sentiDot(a.sentiment)}</td>
-      <td class="q">${esc(a.question)}<small>${esc(a.summary || a.citizen.name || "Гражданин")}</small></td>
-      <td>${esc(a.created_human)}${a.age ? `<small class="age-sub">возраст: ${esc(a.age)}</small>` : ""}</td>
-      <td><span class="pill pill--info">${esc(a.topic)}</span></td>
-      <td>${a.assignee
-        ? `<span class="assignee-tag"><span class="dot"></span>${esc(a.assignee)}</span>`
-        : '<span class="muted">не назначен</span>'}</td>
-      <td>${a.is_overdue ? `<span class="pill pill--danger" title="Срок обработки истёк (регламент ${state.meta?.sla_business_days || 3} дн.)"><span class="pill__dot"></span>Просрочено</span> ` : ""}${statusPill(a.status)}</td>
-    </tr>`).join("");
+  const sig = appealsSignature(items, sort);
+  const tbody = $("#view-root .appeals-table tbody");
+  if (silent && tbody && sig === state._appealsSig) return; // ничего не изменилось
 
-  root.innerHTML = `
-    <div class="fade-in card appeals-card">
-      <table class="appeals-table">
-        <thead><tr>
-          <th>Тон</th><th>Вопрос · суть</th><th>Дата · возраст</th><th>Тематика</th><th>Ответственный</th><th>Статус</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-
-  $$("#view-root tbody tr").forEach((tr) =>
-    tr.addEventListener("click", () => openAppeal(tr.dataset.id)));
+  const rowsHtml = [...items].sort(APPEAL_SORTS[sort].fn).map(appealRowHtml).join("");
+  if (silent && tbody) {
+    tbody.innerHTML = rowsHtml; // мягкая замена строк — раскладка/прокрутка сохраняются
+  } else {
+    root.innerHTML = `
+      <div class="fade-in card appeals-card">
+        <table class="appeals-table">
+          <thead><tr>
+            <th>Тон</th><th>Вопрос · суть</th><th>Дата · возраст</th><th>Тематика</th><th>Ответственный</th><th>Статус</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
+  }
+  bindAppealRows();
+  state._appealsSig = sig;
 }
 
 function confLabel(c) {
@@ -549,10 +579,14 @@ const btnLabel = (ico, text, kbd = "") =>
 function usvoLinkBlock(a) {
   const matches = a.usvo_matches || [];
   if (a.usvo_ambiguous && matches.length > 1) {
+    // Неоднозначность может возникнуть и по телефону, и по совпадению ФИО —
+    // подписываем честно, по чему найдены совпадения.
+    const byName = a.link_by === "name";
+    const crit = byName ? "с совпадающим ФИО" : "с этим номером телефона";
     const list = matches.map((m) =>
       `<button type="button" class="usvo-link" data-usvo="${m.id}">${icon("card", 14)}<span>${esc(m.name || ("Карточка #" + m.id))}${m.phone ? ` · ${esc(m.phone)}` : ""}</span></button>`).join("");
     return `<div class="hero-banner hero-banner--warn usvo-link-block">${icon("info", 18)}
-      <div><b>Несколько карточек УСВО с этим номером телефона.</b>
+      <div><b>Несколько карточек УСВО ${crit}.</b>
       Связь не выбрана автоматически — выберите нужную карточку:
       <div class="usvo-link-list">${list}</div></div></div>`;
   }
@@ -1647,11 +1681,18 @@ const APP_PILL = {
   submitted: "pill--warn", approved: "pill--ok", rejected: "pill--danger",
 };
 
-async function renderApplications() {
+async function renderApplications(opts = {}) {
+  const silent = opts && opts.silent === true;
   const root = $("#view-root");
   // Подраздел «Меры поддержки» — только для администратора.
   if (!state.isAdmin && state.appsTab === "measures") state.appsTab = "list";
   const tab = state.appsTab || "list";
+  // Фоновое автообновление трогает только список поданных заявлений — вкладку
+  // «Меры поддержки» (CRUD админа) не перерисовываем, чтобы ничего не «дёргалось».
+  if (silent) {
+    if (tab !== "list") return;
+    return renderApplicationsListPane({ silent: true });
+  }
   setTitle("Заявления", "Заявления граждан и доступные меры поддержки");
 
   const tabsHtml = state.isAdmin ? `
@@ -1669,21 +1710,45 @@ async function renderApplications() {
   return renderApplicationsListPane();
 }
 
-async function renderApplicationsListPane() {
-  $("#topbar-actions").innerHTML = `
-    ${state.isAdmin ? `<button class="btn btn--soft" id="apps-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
-    <a class="btn btn--soft" href="${API}/export/applications" download>${icon("send")}<span>Экспорт</span></a>
-    <button class="btn btn--ghost" id="reload-apps">${icon("refresh")}<span>Обновить</span></button>`;
-  $("#reload-apps").onclick = renderApplications;
-  const notify = $("#apps-notify");
-  if (notify) notify.onclick = openBroadcastModal;
+/* Одна строка списка поданных заявлений. */
+function applicationRowHtml(a) {
+  const st = APP_STATUS[a.status] || { label: a.status_label || a.status, cls: "open" };
+  const pcls = APP_PILL[a.status] || "pill--warn";
+  const who = a.applicant.fio || a.citizen.name || "Заявитель";
+  const basis = a.is_measure ? "Мера поддержки" : (a.category || "—");
+  const docsCell = a.is_measure
+    ? `<span class="pill pill--info">полей: ${a.measure_fields.length}</span>`
+    : (a.missing && a.missing.length
+      ? `<span class="pill pill--warn">уточнить: ${a.missing.length}</span>`
+      : '<span class="muted">полный пакет</span>');
+  return `<tr data-id="${a.id}">
+    <td class="q">${esc(a.measure_title)}<small>${esc(who)}</small></td>
+    <td>${esc(a.created_human)}</td>
+    <td><span class="pill pill--info">${esc(basis)}</span></td>
+    <td>${docsCell}</td>
+    <td><span class="pill ${pcls}"><span class="pill__dot"></span>${esc(st.label)}</span></td>
+  </tr>`;
+}
+
+async function renderApplicationsListPane(opts = {}) {
+  const silent = opts && opts.silent === true;
+  if (!silent) {
+    $("#topbar-actions").innerHTML = `
+      ${state.isAdmin ? `<button class="btn btn--soft" id="apps-notify">${icon("send")}<span>Оповестить</span></button>` : ""}
+      <a class="btn btn--soft" href="${API}/export/applications" download>${icon("send")}<span>Экспорт</span></a>
+      <button class="btn btn--ghost" id="reload-apps">${icon("refresh")}<span>Обновить</span></button>`;
+    $("#reload-apps").onclick = () => renderApplications();
+    const notify = $("#apps-notify");
+    if (notify) notify.onclick = openBroadcastModal;
+  }
 
   const c = $("#apps-content");
+  if (!c) return; // вкладка сменилась во время запроса — обновлять нечего
   let items = [];
   try {
     ({ items } = await api("/applications"));
   } catch (e) {
-    c.innerHTML = emptyState("Не удалось загрузить", e.message);
+    if (!silent) c.innerHTML = emptyState("Не удалось загрузить", e.message);
     return;
   }
   state.applications = items;
@@ -1691,29 +1756,25 @@ async function renderApplicationsListPane() {
   $("#nav-apps-count").textContent = pending || "";
 
   if (!items.length) {
+    if (silent && !$("#apps-content .appeals-table")) return; // уже пусто — не трогаем DOM
     c.innerHTML = emptyState("Заявлений пока нет",
       "Гражданин оформляет меру поддержки в боте MAX — после подтверждения заявление появится здесь.", "doc");
+    state._appsSig = "";
     return;
   }
 
-  const rows = items.map((a) => {
-    const st = APP_STATUS[a.status] || { label: a.status_label || a.status, cls: "open" };
-    const pcls = APP_PILL[a.status] || "pill--warn";
-    const who = a.applicant.fio || a.citizen.name || "Заявитель";
-    const basis = a.is_measure ? "Мера поддержки" : (a.category || "—");
-    const docsCell = a.is_measure
-      ? `<span class="pill pill--info">полей: ${a.measure_fields.length}</span>`
-      : (a.missing && a.missing.length
-        ? `<span class="pill pill--warn">уточнить: ${a.missing.length}</span>`
-        : '<span class="muted">полный пакет</span>');
-    return `<tr data-id="${a.id}">
-      <td class="q">${esc(a.measure_title)}<small>${esc(who)}</small></td>
-      <td>${esc(a.created_human)}</td>
-      <td><span class="pill pill--info">${esc(basis)}</span></td>
-      <td>${docsCell}</td>
-      <td><span class="pill ${pcls}"><span class="pill__dot"></span>${esc(st.label)}</span></td>
-    </tr>`;
-  }).join("");
+  const sig = items.map((a) => `${a.id}:${a.status}`).join(",");
+  const tbody = $("#apps-content .appeals-table tbody");
+  if (silent && tbody && sig === state._appsSig) return; // ничего не изменилось
+
+  const rows = items.map(applicationRowHtml).join("");
+  if (silent && tbody) {
+    tbody.innerHTML = rows; // мягкая замена строк — без мигания и скачка прокрутки
+    $$("#apps-content tbody tr").forEach((tr) =>
+      tr.addEventListener("click", () => openApplication(+tr.dataset.id)));
+    state._appsSig = sig;
+    return;
+  }
 
   c.innerHTML = `
     <div class="fade-in card appeals-card">
@@ -1726,6 +1787,7 @@ async function renderApplicationsListPane() {
     </div>`;
   $$("#apps-content tbody tr").forEach((tr) =>
     tr.addEventListener("click", () => openApplication(+tr.dataset.id)));
+  state._appsSig = sig;
 }
 
 /* ---------- подраздел «Меры поддержки» (CRUD, только админ) ---------- */
@@ -2785,10 +2847,13 @@ const VIEWS = {
 };
 
 setInterval(() => {
+  if (document.hidden) return; // вкладка не видна — незачем дёргать сеть/DOM
   if ($("#modal") && !$("#modal").hidden) return;
   if (drawerOpen()) return; // не перерисовываем список под открытой панелью
-  if (state.view === "appeals") renderAppeals().catch((e) => toast(e.message, "err"));
-  else if (state.view === "applications") renderApplications().catch((e) => toast(e.message, "err"));
+  // Тихое автообновление: без скелетона и без перестройки DOM, если данные не
+  // изменились (см. renderAppeals/renderApplications) — интерфейс не «дёргается».
+  if (state.view === "appeals") renderAppeals({ silent: true }).catch((e) => toast(e.message, "err"));
+  else if (state.view === "applications") renderApplications({ silent: true }).catch((e) => toast(e.message, "err"));
 }, 15000);
 
 function setTitle(t, sub = "") {

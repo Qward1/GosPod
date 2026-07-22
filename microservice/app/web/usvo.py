@@ -628,11 +628,30 @@ def _norm_phone(phone: str) -> str:
     return d[-10:] if len(d) >= 10 else d
 
 
+def _norm_birth(birth: str) -> str:
+    """Каноничная дата рождения (YYYYMMDD) для сравнения карточек. Понимает
+    распространённые форматы (ISO `1980-05-01`, русский `01.05.1980`, со слэшами),
+    чтобы одна и та же дата, записанная по-разному, давала ОДИН ключ. Иначе
+    простой «выброс нецифр» путал порядок (01.05.1980 → 01051980 против
+    1980-05-01 → 19800501). Нераспознанное — просто цифры (обратная совместимость)."""
+    s = (birth or "").strip()
+    if not s:
+        return ""
+    token = s.split()[0].replace("г.", "").strip()  # отбрасываем время/«г.»
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y",
+                "%Y/%m/%d", "%Y.%m.%d", "%d.%m.%y"):
+        try:
+            return dt.datetime.strptime(token, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return re.sub(r"\D", "", s)
+
+
 def card_identity(name: str, birth_date: str = "", phone: str = "") -> str:
     """Устойчивый ключ карточки. Пустая строка — идентичность не определима
     (такие карточки в дедупликации не участвуют, чтобы не склеить разных людей)."""
     nm = _norm_name(name)
-    birth = re.sub(r"\D", "", birth_date or "")
+    birth = _norm_birth(birth_date)
     ph = _norm_phone(phone)
     if nm and birth:
         return f"nb:{nm}|{birth}"
@@ -647,3 +666,26 @@ def card_identity(name: str, birth_date: str = "", phone: str = "") -> str:
 
 def record_identity(rec: "UsvoRecord") -> str:
     return card_identity(rec.name, rec.birth_date, rec.phone)
+
+
+def card_identity_strict(name: str, birth_date: str = "", phone: str = "") -> str:
+    """Строгий ключ дубликата для ЗАГРУЗКИ данных (импорт Excel): дубль — только
+    когда совпали ВСЕ три реквизита сразу — ФИО + дата рождения + телефон.
+
+    В отличие от `card_identity` (каскад «или») здесь ключ всегда включает все
+    три компонента; пустые сравниваются как равные (обе карточки без телефона —
+    совпадение по этому реквизиту). ФИО обязательно: без него дубликат не
+    определяем (пустая строка → в дедупликации не участвует, чтобы не склеить
+    разных людей). Повторный импорт того же файла реквизиты не меняет → дубли
+    не плодятся; две карточки с одинаковым ФИО+датой, но РАЗНЫМ телефоном —
+    считаются разными и обе сохраняются."""
+    nm = _norm_name(name)
+    if not nm:
+        return ""
+    birth = _norm_birth(birth_date)
+    ph = _norm_phone(phone)
+    return f"npb:{nm}|{birth}|{ph}"
+
+
+def record_identity_strict(rec: "UsvoRecord") -> str:
+    return card_identity_strict(rec.name, rec.birth_date, rec.phone)

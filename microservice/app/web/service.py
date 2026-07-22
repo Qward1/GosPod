@@ -36,11 +36,14 @@ from app.web.topics import classify_topic
 from app.web.usvo import (
     UsvoRecord,
     UsvoStore,
+    _norm_birth,
     _norm_name,
     _norm_phone,
     card_identity,
+    card_identity_strict,
     find_field_value,
     record_identity,
+    record_identity_strict,
 )
 from app.web.usvo_db import USVO_DB_ID_BASE, UsvoCardStore, is_db_id
 
@@ -370,56 +373,60 @@ class WebService:
                     return r
         return None
 
-    def _usvo_matches_by_phone(self, phone: str) -> list[UsvoRecord]:
-        """Все карточки УСВО с тем же нормализованным телефоном (последние 10 цифр).
-
-        Задание «связать обращение из MAX с карточкой УСВО по номеру телефона»:
-        номера сравниваются в едином формате (учёт +7/8, пробелов, скобок, дефисов).
-        Возвращается СПИСОК — при неоднозначности (несколько карточек) связь не
-        выбирается случайно, оператору показываются все совпадения."""
-        norm = _norm_phone(phone)
-        if not norm:
-            return []
-        return [r for r in self._all_records() if _norm_phone(r.phone) == norm]
-
-    def _match_usvo_by_name(self, name: str) -> UsvoRecord | None:
-        """Строгий матч карточки по ФИО — только для связи обращения.
-
-        В отличие от `_match_usvo` (свободный substring, годится для черновика
-        ответа) требует совпадения минимум ДВУХ значимых токенов ФИО (длиной ≥3,
-        напр. фамилия + имя). Иначе одно общее имя («Владислав») ложно связывало
-        обращение с чужой карточкой («Зорин Владислав Игоревич»)."""
+    def _name_tokens_match(self, name: str, rec: UsvoRecord) -> bool:
+        """Строгий матч ФИО для связи обращения: минимум ДВА общих значимых токена
+        (длиной ≥3, напр. фамилия + имя). Одно общее имя («Владислав») карточку НЕ
+        связывает — иначе была ложная привязка к чужому «Зорин Владислав …»."""
         tokens = {t for t in _norm_name(name).split() if len(t) >= 3}
         if len(tokens) < 2:
-            return None
-        for r in self._all_records():
-            rt = {t for t in _norm_name(r.name).split() if len(t) >= 3}
-            if len(tokens & rt) >= 2:
-                return r
-        return None
+            return False
+        rt = {t for t in _norm_name(rec.name).split() if len(t) >= 3}
+        return len(tokens & rt) >= 2
 
-    def _link_usvo(self, name: str = "", phone: str = "") -> dict:
-        """Определяет связь обращения с карточкой(ами) УСВО.
+    def _link_usvo(self, name: str = "", phone: str = "", birth: str = "") -> dict:
+        """Определяет связь обращения из MAX с карточкой(ами) УСВО.
 
-        Приоритет — точное совпадение телефона (может дать несколько карточек);
-        если телефон не дал ничего — строгий матч по ФИО (фамилия+имя, одна
-        карточка). Возвращает {usvo_id, usvo_matches:[{id,name,phone}],
-        usvo_ambiguous, link_by}. `link_by` ∈ {"phone","name",""} — КАК определена
-        связь: телефон надёжен, ФИО — предположение (важно, чтобы UI не выдавал
-        матч по имени за «связь по номеру телефона»)."""
-        matches = self._usvo_matches_by_phone(phone)
-        link_by = "phone" if matches else ""
+        Каскад поиска (ФИО обязательно на КАЖДОМ шаге; берётся первый шаг, давший
+        совпадения):
+          1) ФИО + телефон + дата рождения;
+          2) ФИО + телефон  ИЛИ  ФИО + дата рождения;
+          3) только ФИО.
+        (Дата рождения из MAX сейчас недоступна — тогда шаги 1 и «+дата» пусты, и
+        каскад корректно вырождается в ФИО+телефон → ФИО.)
+
+        Возвращает {usvo_id, usvo_matches:[{id,name,phone}], usvo_ambiguous,
+        link_by}. `link_by` ∈ {"phone","name",""}: если во всех совпадениях
+        подтверждён телефон — «phone» (надёжно), иначе «name» (предположение —
+        UI просит проверить номер, чтобы не выдавать матч по ФИО/дате за «по
+        номеру телефона»)."""
+        qphone = _norm_phone(phone)
+        qbirth = _norm_birth(birth)
+
+        def phone_ok(r: UsvoRecord) -> bool:
+            return bool(qphone) and _norm_phone(r.phone) == qphone
+
+        def birth_ok(r: UsvoRecord) -> bool:
+            return bool(qbirth) and _norm_birth(r.birth_date) == qbirth
+
+        # ФИО — обязательное условие связи на всех шагах каскада.
+        named = [r for r in self._all_records() if self._name_tokens_match(name, r)]
+        matches = [r for r in named if phone_ok(r) and birth_ok(r)]          # 1
         if not matches:
-            rec = self._match_usvo_by_name(name)
-            if rec:
-                matches = [rec]
-                link_by = "name"
-        ambiguous = len(matches) > 1
+            matches = [r for r in named if phone_ok(r) or birth_ok(r)]       # 2
+        if not matches:
+            matches = named                                                  # 3
+
+        if not matches:
+            return {"usvo_id": None, "usvo_matches": [], "usvo_ambiguous": False,
+                    "link_by": ""}
+        # Телефон подтверждён во ВСЕХ совпадениях → надёжная связь «по телефону»,
+        # иначе (совпадение только по ФИО/дате) — мягкая «по ФИО».
+        link_by = "phone" if all(phone_ok(r) for r in matches) else "name"
         return {
             "usvo_id": matches[0].id if len(matches) == 1 else None,
             "usvo_matches": [{"id": r.id, "name": r.name, "phone": r.phone} for r in matches],
-            "usvo_ambiguous": ambiguous,
-            "link_by": link_by if matches else "",
+            "usvo_ambiguous": len(matches) > 1,
+            "link_by": link_by,
         }
 
     # ---- синтезированные обращения ----------------------------------------
@@ -821,7 +828,9 @@ class WebService:
         # Идентичности уже имеющихся карточек (загруженных + табличных). Совпадающие
         # карточки из файла пропускаем — это и есть защита от дубликатов: версия,
         # лежащая в базе (с правками оператора), остаётся, копия из Excel не плодится.
-        existing = {record_identity(r) for r in self._all_records()}
+        # ЗАГРУЗКА данных: дубль = совпали ВСЕ три реквизита сразу (ФИО + дата
+        # рождения + телефон) — строгий ключ `card_identity_strict`.
+        existing = {record_identity_strict(r) for r in self._all_records()}
         existing.discard("")
 
         import time as _t
@@ -833,8 +842,8 @@ class WebService:
         # идентификаторам они распознаны (ФИО + дата рождения / телефон).
         skipped_details: list[dict] = []
         for card in cards:
-            ident = card_identity(card.get("name", ""), card.get("birth_date", ""),
-                                  card.get("phone", ""))
+            ident = card_identity_strict(card.get("name", ""), card.get("birth_date", ""),
+                                         card.get("phone", ""))
             if ident and ident in existing:
                 skipped += 1
                 skipped_details.append({
@@ -1537,9 +1546,11 @@ def _human_ts(ts: float) -> str:
 
 def _dedup_reason(ident: str) -> str:
     """Человекочитаемая причина, почему запись распознана как дубль (по префиксу
-    ключа идентичности из usvo.card_identity)."""
+    ключа идентичности). При загрузке используется строгий ключ `npb`
+    (ФИО + дата рождения + телефон), остальные — на случай старых вызовов."""
     prefix = ident.split(":", 1)[0] if ":" in ident else ""
     return {
+        "npb": "Совпали ФИО, дата рождения и телефон",
         "nb": "Совпали ФИО и дата рождения",
         "np": "Совпали ФИО и телефон",
         "n": "Совпало ФИО",
