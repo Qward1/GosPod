@@ -381,6 +381,84 @@ def test_topic_stub_for_gkh_and_roads():
     asyncio.run(scenario())
 
 
+def _bot_started(chat_id: str = "100", user_id: str = "u1", name: str = "Иван") -> dict:
+    """Апдейт первого контакта: гражданин нажал «Начать общение» в диалоге с ботом.
+
+    Структура плоская (chat_id/user прямо в апдейте), а не как у message_created.
+    """
+    return {
+        "update_type": "bot_started",
+        "chat_id": chat_id,
+        "user": {"user_id": user_id, "name": name},
+    }
+
+
+def test_bot_started_sends_welcome():
+    """Кнопка «Начать общение» (первый контакт) — приветствие с кнопками тем."""
+    from app.max.bot_logic import (
+        MSG_TOPIC_GKH,
+        MSG_TOPIC_MEASURES,
+        MSG_TOPIC_ROADS,
+        MSG_WELCOME,
+    )
+
+    store = _temp_store()
+    fake_max = FakeMax()
+    bot = _bot(store, fake_max, FakeDocAI({"filled_fields": {}, "missing_fields": []}))
+
+    async def scenario():
+        await bot.handle_update(_bot_started())
+
+        assert len(fake_max.messages) == 1
+        msg = fake_max.messages[0]
+        assert msg["text"] == MSG_WELCOME
+        assert msg["chat_id"] == "100"
+        assert [row[0]["text"] for row in msg["rows"]] == [
+            MSG_TOPIC_MEASURES, MSG_TOPIC_GKH, MSG_TOPIC_ROADS,
+        ]
+        # пользователь заведён — дальше идёт обычный сценарий по кнопкам
+        assert store.get_user("u1") is not None
+
+    asyncio.run(scenario())
+
+
+def test_bot_started_resets_profile():
+    """«Начать общение» = «начать сначала»: анкета и незакрытый опрос сбрасываются."""
+    store = _temp_store()
+    fake_max = FakeMax()
+    bot = _bot(store, fake_max, FakeDocAI({"filled_fields": {}, "missing_fields": []}))
+
+    async def scenario():
+        store.ensure_user("u1", "100", "Иван", "")
+        store.set_user_profile("u1", relation="Супруга", region_ok=True, locality="Видное")
+        store.set_bot_flow("u1", "await_phone")
+
+        await bot.handle_update(_bot_started())
+
+        assert store.get_bot_flow("u1") is None
+        row = store.get_user("u1")
+        assert not row["relation"] and not row["locality"]
+
+    asyncio.run(scenario())
+
+
+def test_bot_started_without_chat_id_falls_back_to_user_id():
+    """Если в апдейте нет chat_id — шлём в личный диалог по user_id."""
+    store = _temp_store()
+    fake_max = FakeMax()
+    bot = _bot(store, fake_max, FakeDocAI({"filled_fields": {}, "missing_fields": []}))
+
+    async def scenario():
+        update = _bot_started()
+        update.pop("chat_id")
+        await bot.handle_update(update)
+
+        assert len(fake_max.messages) == 1
+        assert fake_max.messages[0]["chat_id"] == "u1"
+
+    asyncio.run(scenario())
+
+
 def test_webservice_measure_crud_and_template(tmp_path):
     from app.max.client import MaxClient
     from app.max.dify_client import DifyClient

@@ -116,6 +116,10 @@ MSG_UNSUBSCRIBED = (
     "Хорошо, уведомления отправлять не будем. Статус заявления вы всегда можете "
     "узнать здесь же в чате."
 )
+MSG_UNSUBSCRIBED_DONE = (
+    "🔕 Готово! Вы отписались от рассылки — уведомления о новых мерах поддержки "
+    "приходить не будут. Подписаться снова можно в любой момент кнопкой ниже."
+)
 
 MSG_ESCALATED = "Спасибо за вопрос! Он передан оператору — мы ответим вам в ближайшее время."
 MSG_OFFER = "Не хотите записаться на приём?"
@@ -192,6 +196,8 @@ class MaxBot:
         try:
             if update_type == "message_callback":
                 await self._handle_callback(update)
+            elif update_type == "bot_started":
+                await self._handle_bot_started(update)
             elif update_type in ("message_created", "message", None):
                 message = update.get("message") or update
                 await self._handle_message(message)
@@ -199,6 +205,41 @@ class MaxBot:
                 log.info("Пропущен update_type=%s", update_type)
         except Exception:  # noqa: BLE001 — webhook не должен падать целиком
             log.exception("Ошибка обработки апдейта")
+
+    async def _handle_bot_started(self, update: dict) -> None:
+        """Первый контакт: гражданин нажал «Начать общение» в диалоге с ботом.
+
+        MAX присылает это отдельным апдейтом `bot_started` (а НЕ message_created),
+        причём с плоской структурой: `chat_id` и `user` лежат прямо в апдейте, а не
+        под `message.recipient`/`message.sender`. Без этой ветки апдейт молча
+        отбрасывался, и приветствие не показывалось, пока гражданин сам что-нибудь
+        не напишет.
+        """
+        user = update.get("user") or {}
+        user_id = _id(user.get("user_id"))
+        chat_id = _id(update.get("chat_id")) or user_id
+        name = user.get("name") or user.get("first_name") or ""
+        username = user.get("username") or ""
+        await self._handle_start(user_id, chat_id, name, username)
+
+    async def _handle_start(self, user_id: str, chat_id: str, name: str, username: str) -> None:
+        """«Начать сначала»: сбрасываем анкету с опросом и показываем экран 1.
+
+        Общий обработчик для команды /start и для кнопки «Начать общение»
+        (апдейт `bot_started`) — чтобы гражданин мог заново ввести родство,
+        прописку и телефон.
+        """
+        self.store.ensure_user(user_id, chat_id, name, username)
+        self.store.clear_bot_flow(user_id)
+        self.store.clear_user_profile(user_id)
+        await self._send_welcome(chat_id, user_id)
+
+    async def _send_welcome(self, chat_id: str, user_id: str) -> None:
+        """Экран 1: приветствие с тремя тематическими кнопками."""
+        await self.max.send_message(
+            MSG_WELCOME, chat_id=chat_id, user_id=user_id,
+            keyboard_rows=self._topic_rows(),
+        )
 
     # ====================================================================
     # Входящее текстовое сообщение
@@ -271,13 +312,7 @@ class MaxBot:
         # /start = «начать сначала»: сбрасываем сохранённый профиль анкеты и текущий
         # опрос, чтобы гражданин мог заново ввести телефон/прописку/родство.
         if text.split()[0].lower().lstrip("/") == "start" and text.startswith("/"):
-            self.store.ensure_user(user_id, chat_id, name, username)
-            self.store.clear_bot_flow(user_id)
-            self.store.clear_user_profile(user_id)
-            await self.max.send_message(
-                MSG_WELCOME, chat_id=chat_id, user_id=user_id,
-                keyboard_rows=self._topic_rows(),
-            )
+            await self._handle_start(user_id, chat_id, name, username)
             return
 
         # Текстовый триггер входа в сценарий «Меры поддержки» (на случай, если
@@ -294,10 +329,7 @@ class MaxBot:
         # Новому пользователю (первое обращение) сначала показываем приветствие,
         # а затем отвечаем на его вопрос как обычно.
         if self.store.get_user(user_id) is None:
-            await self.max.send_message(
-                MSG_WELCOME, chat_id=chat_id, user_id=user_id,
-                keyboard_rows=self._topic_rows(),
-            )
+            await self._send_welcome(chat_id, user_id)
 
         self.store.ensure_user(user_id, chat_id, name, username)
         since_offer = self.store.add_question(user_id, text)
@@ -500,10 +532,14 @@ class MaxBot:
             await self._handle_relation_choice(
                 user_id, chat_id, name, username, payload.get("v", "")
             )
-        elif action == "sub":  # подписка на уведомления (финал оформления меры)
+        elif action == "sub":  # подписка/отписка на рассылку (финал оформления меры)
             await self.max.answer_callback(callback_id)
             await self._delete_if(source_mid)
-            await self._handle_subscription(user_id, chat_id, bool(payload.get("v")))
+            await self._handle_subscription(
+                user_id, chat_id,
+                subscribed=bool(payload.get("v")),
+                explicit_unsub=bool(payload.get("u")),
+            )
         elif action == "sm_menu":  # «Оформление мер поддержки» → список активных мер
             await self.max.answer_callback(callback_id)
             await self._send_measure_menu(chat_id, user_id)
@@ -1038,7 +1074,9 @@ class MaxBot:
 
         number = _application_number(application_id)
         rows = [
-            [{"text": "🔔 Подписаться на обновления", "payload": json.dumps({"a": "sub", "v": 1})}],
+            [{"text": "🔔 Подписаться на рассылку", "payload": json.dumps({"a": "sub", "v": 1})}],
+            [{"text": "🔕 Отписаться от рассылки",
+              "payload": json.dumps({"a": "sub", "v": 0, "u": 1})}],
             [{"text": "❌ Нет, спасибо", "payload": json.dumps({"a": "sub", "v": 0})}],
         ]
         await self.max.send_message(
@@ -1065,14 +1103,37 @@ class MaxBot:
             operator_text += "\n\n📎 Документы заявителя:\n" + "\n".join(files)
         await self.max.send_message(operator_text, chat_id=self.operator_chat_id)
 
+    def _subscription_rows(self, subscribed: bool) -> list[list[dict]]:
+        """Кнопка-переключатель подписки на рассылку.
+
+        Показывает действие, противоположное текущему состоянию: подписан → «Отписаться»,
+        не подписан → «Подписаться». Благодаря ей выбор всегда обратим — гражданину не нужно
+        заново проходить оформление меры, чтобы изменить подписку.
+        """
+        if subscribed:
+            return [[{"text": "🔕 Отписаться от рассылки",
+                      "payload": json.dumps({"a": "sub", "v": 0, "u": 1})}]]
+        return [[{"text": "🔔 Подписаться на рассылку",
+                  "payload": json.dumps({"a": "sub", "v": 1})}]]
+
     async def _handle_subscription(
-        self, user_id: str, chat_id: str, subscribed: bool
+        self, user_id: str, chat_id: str, subscribed: bool, explicit_unsub: bool = False
     ) -> None:
-        """Обрабатывает выбор подписки на уведомления (экран 5)."""
+        """Обрабатывает подписку/отписку на рассылку (экран 5 и кнопка-переключатель).
+
+        subscribed — новое состояние; explicit_unsub=True отличает явную отписку от «Нет,
+        спасибо» (деклайн предложения), чтобы показать корректное подтверждение.
+        """
         self.store.set_user_subscribed(user_id, subscribed)
+        if subscribed:
+            text = MSG_SUBSCRIBED
+        elif explicit_unsub:
+            text = MSG_UNSUBSCRIBED_DONE
+        else:
+            text = MSG_UNSUBSCRIBED
+        rows = self._subscription_rows(subscribed) + self._topic_rows()
         await self.max.send_message(
-            MSG_SUBSCRIBED if subscribed else MSG_UNSUBSCRIBED,
-            chat_id=chat_id, user_id=user_id, keyboard_rows=self._topic_rows(),
+            text, chat_id=chat_id, user_id=user_id, keyboard_rows=rows,
         )
 
     def _sm_cancel_rows(self, application_id: int) -> list[list[dict]]:
