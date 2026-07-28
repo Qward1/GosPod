@@ -21,16 +21,24 @@ config.yaml
 .env
 *.env
 
+# ── Node / фронтенд (собираемая статика попадает в app/web/static) ──
+node_modules/
+*.tsbuildinfo
+
 # ── Runtime data: базы, логи, шаблоны мер (создаются в рантайме) ──
 microservice/data/*.db
 microservice/data/*.log
 microservice/data/measure_templates/
+*.db
+*.db-wal
+*.db-shm
 
 # ── Документация и заметки: в репозитории только корневой README.md ──
 # (остальные .md остаются на диске, но не публикуются; history_styles.md —
 #  рабочие данные приложения, поэтому явно возвращается)
 *.md
 !/README.md
+!/RELEASE_NOTES_*.md
 !microservice/data/history_styles.md
 
 # ── Локальные бэкапы, отчёты, черновики, образцы (на диске, не в репозитории) ──

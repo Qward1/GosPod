@@ -1,0 +1,74 @@
+# Ory Kratos — конфиг для НАТИВНОГО запуска на Windows (без Docker).
+# Отличия от kratos.yml: DSN = in-memory SQLite (dev) и относительный путь к
+# схеме идентичности. Запускать ИЗ ПАПКИ, где лежат kratos.exe + этот файл +
+# identity.schema.json (рекомендуется простой ASCII-путь, напр. C:\kratos).
+#
+#   C:\kratos\kratos.exe serve -c C:\kratos\kratos.windows.yml --dev
+#
+# --dev снимает требование HTTPS/secure-cookie для localhost; DSN=memory
+# авто-мигрируется при старте (данные живут до перезапуска).
+
+dsn: memory
+
+serve:
+  public:
+    base_url: http://localhost:4433/
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:8080
+      allowed_methods: [GET, POST, PUT, PATCH, DELETE]
+      allowed_headers: [Authorization, Content-Type, X-Session-Token]
+      exposed_headers: [Content-Type, Set-Cookie]
+  admin:
+    base_url: http://localhost:4434/
+
+selfservice:
+  default_browser_return_url: http://localhost:8080/
+  allowed_return_urls:
+    - http://localhost:8080/
+  methods:
+    password:
+      enabled: true
+  flows:
+    error:
+      ui_url: http://localhost:8080/login.html
+    login:
+      ui_url: http://localhost:8080/login.html
+      lifespan: 10m
+    logout:
+      after:
+        default_browser_return_url: http://localhost:8080/login.html
+    settings:
+      ui_url: http://localhost:8080/login.html
+    registration:
+      enabled: true
+      ui_url: http://localhost:8080/login.html
+
+session:
+  lifespan: 12h
+
+identity:
+  default_schema_id: employee
+  schemas:
+    - id: employee
+      # Относительный путь — резолвится от текущей папки запуска.
+      url: file://./identity.schema.json
+
+secrets:
+  cookie:
+    - CHANGE-ME-32-byte-cookie-secret-xx
+  cipher:
+    - CHANGE-ME-32-byte-cipher-secret-xx
+
+hashers:
+  argon2:
+    parallelism: 1
+    memory: 128MB
+    iterations: 2
+    salt_length: 16
+    key_length: 16
+
+log:
+  level: info
+  format: text

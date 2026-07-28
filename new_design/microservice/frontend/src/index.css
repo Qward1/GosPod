@@ -1,0 +1,275 @@
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/geist-mono/400.css";
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Label + input/textarea/select: ровно 8px между заголовком и полем */
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@theme inline {
+  --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.985 0.004 250);
+  --foreground: oklch(0.2 0.02 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.02 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.02 255);
+  --primary: oklch(0.42 0.12 255);
+  --primary-foreground: oklch(0.98 0.01 255);
+  --secondary: oklch(0.95 0.01 250);
+  --secondary-foreground: oklch(0.28 0.03 255);
+  --muted: oklch(0.95 0.008 250);
+  --muted-foreground: oklch(0.5 0.02 255);
+  --accent: oklch(0.94 0.02 250);
+  --accent-foreground: oklch(0.28 0.03 255);
+  --destructive: oklch(0.55 0.2 25);
+  --border: oklch(0.9 0.01 250);
+  --input: oklch(0.9 0.01 250);
+  --ring: oklch(0.55 0.1 255);
+  --sidebar: oklch(0.98 0.006 250);
+  --sidebar-foreground: oklch(0.28 0.03 255);
+  --sidebar-border: oklch(0.9 0.01 250);
+  --sidebar-accent: oklch(0.94 0.025 250);
+  --sidebar-accent-foreground: oklch(0.28 0.03 255);
+}
+
+.dark {
+  --background: oklch(0.16 0.02 255);
+  --foreground: oklch(0.95 0.01 255);
+  --card: oklch(0.2 0.025 255);
+  --card-foreground: oklch(0.95 0.01 255);
+  --popover: oklch(0.2 0.025 255);
+  --popover-foreground: oklch(0.95 0.01 255);
+  --primary: oklch(0.58 0.14 255);
+  --primary-foreground: oklch(0.98 0.01 255);
+  --secondary: oklch(0.26 0.03 255);
+  --secondary-foreground: oklch(0.95 0.01 255);
+  --muted: oklch(0.26 0.025 255);
+  --muted-foreground: oklch(0.7 0.02 255);
+  --accent: oklch(0.28 0.035 255);
+  --accent-foreground: oklch(0.95 0.01 255);
+  --destructive: oklch(0.65 0.18 25);
+  --border: oklch(0.3 0.03 255);
+  --input: oklch(0.3 0.03 255);
+  --ring: oklch(0.6 0.08 250);
+  --sidebar: oklch(0.14 0.02 255);
+  --sidebar-foreground: oklch(0.92 0.01 255);
+  --sidebar-border: oklch(0.28 0.03 255);
+  --sidebar-accent: oklch(0.24 0.035 255);
+  --sidebar-accent-foreground: oklch(0.95 0.01 255);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans antialiased;
+  }
+  body {
+    @apply h-svh overflow-hidden bg-background text-foreground;
+  }
+  #root {
+    @apply h-svh overflow-hidden;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--primary);
+  }
+}
+
+/* Login hero panel */
+.login-hero-grain {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  mix-blend-mode: overlay;
+}
+
+.login-hero-beam {
+  background: linear-gradient(
+    118deg,
+    transparent 35%,
+    rgba(90, 160, 255, 0.08) 42%,
+    rgba(140, 200, 255, 0.55) 50%,
+    rgba(90, 160, 255, 0.08) 58%,
+    transparent 65%
+  );
+  filter: blur(18px);
+  transform-origin: center;
+  animation: login-beam-drift 14s ease-in-out infinite alternate;
+}
+
+.login-hero-beam-a {
+  opacity: 0.85;
+  transform: translateX(-8%) rotate(-8deg) scale(1.2);
+}
+
+.login-hero-beam-b {
+  opacity: 0.55;
+  filter: blur(28px);
+  transform: translateX(12%) rotate(-14deg) scale(1.35);
+  animation-duration: 18s;
+  animation-delay: -4s;
+  background: linear-gradient(
+    125deg,
+    transparent 40%,
+    rgba(60, 130, 255, 0.12) 47%,
+    rgba(170, 210, 255, 0.45) 52%,
+    rgba(60, 130, 255, 0.12) 57%,
+    transparent 64%
+  );
+}
+
+.login-hero-beam-c {
+  opacity: 0.4;
+  filter: blur(40px);
+  transform: translateY(10%) rotate(-4deg) scale(1.5);
+  animation-duration: 22s;
+  animation-delay: -8s;
+  background: linear-gradient(
+    110deg,
+    transparent 30%,
+    rgba(40, 100, 220, 0.2) 48%,
+    rgba(120, 180, 255, 0.35) 52%,
+    transparent 70%
+  );
+}
+
+@keyframes login-beam-drift {
+  from {
+    translate: -4% 2%;
+  }
+  to {
+    translate: 6% -3%;
+  }
+}
+
+.login-slide-enter {
+  animation: login-slide-in 420ms ease-out;
+}
+
+@keyframes login-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Address map preview (USVO card) */
+.address-map-canvas {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.35) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(135deg, #cfe0ff 0%, #aac4f5 100%);
+}
+.dark .address-map-canvas {
+  background:
+    linear-gradient(90deg, rgba(120, 150, 200, 0.18) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(rgba(120, 150, 200, 0.12) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(135deg, #15203c 0%, #1b2c52 100%);
+}
+.address-map-canvas::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.8;
+  background:
+    linear-gradient(
+      58deg,
+      transparent 47%,
+      rgba(255, 255, 255, 0.5) 47.5%,
+      rgba(255, 255, 255, 0.5) 49%,
+      transparent 49.5%
+    ),
+    linear-gradient(
+      -22deg,
+      transparent 62%,
+      rgba(255, 255, 255, 0.4) 62.5%,
+      rgba(255, 255, 255, 0.4) 63.6%,
+      transparent 64%
+    );
+}
+.dark .address-map-canvas::before {
+  background:
+    linear-gradient(
+      58deg,
+      transparent 47%,
+      rgba(180, 200, 230, 0.35) 47.5%,
+      rgba(180, 200, 230, 0.35) 49%,
+      transparent 49.5%
+    ),
+    linear-gradient(
+      -22deg,
+      transparent 62%,
+      rgba(180, 200, 230, 0.28) 62.5%,
+      rgba(180, 200, 230, 0.28) 63.6%,
+      transparent 64%
+    );
+}
+.address-map-pin {
+  display: inline-flex;
+  animation: address-pin-drop 0.5s ease;
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.3));
+}
+.address-map-pin::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.22);
+}
+@keyframes address-pin-drop {
+  from {
+    transform: translate(-50%, -160%);
+    opacity: 0;
+  }
+}

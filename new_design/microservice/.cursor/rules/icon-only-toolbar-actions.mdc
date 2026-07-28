@@ -1,0 +1,12 @@
+---
+description: Keep recurring toolbar actions compact and icon-only
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# Toolbar action buttons
+
+- Render filter actions as an outlined 32×32 icon button with only the funnel icon.
+- Render refresh actions as an outlined 32×32 icon button with only the refresh icon.
+- Do not put visible text or counters inside these buttons.
+- Always provide an accessible `title` and `aria-label`.
