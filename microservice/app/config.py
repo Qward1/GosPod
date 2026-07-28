@@ -56,7 +56,6 @@ class UsvoAiCfg(BaseModel):
     dataset: DatasetCfg = Field(default_factory=DatasetCfg)
     timeout: float = 90.0
     max_history_messages: int = 30
-    auto_sync: bool = True
     # Необязательный Dify-ассистент-планировщик запросов (usvo_query_assistant.yml,
     # structured_output QuerySpec): превращает вопрос в фильтр/агрегат для точного
     # подсчёта по всем карточкам. Пусто → офлайн-эвристика разбора вопроса.

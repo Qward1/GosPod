@@ -113,7 +113,9 @@ dify:
     full_context_max_chars: 45000                 # бюджет символов на блок всех карточек
     timeout: 90
     max_history_messages: 30
-    auto_sync: true
+    # Полная пересборка базы знаний УСВО запускается ТОЛЬКО кнопкой «Пересобрать
+    # базу знаний» в «Чате с ИИ»; правки карточек уходят точечно, сообщение в чат
+    # синхронизацию не запускает (прежний ключ auto_sync больше не читается).
     dataset:
       api_key: "dataset-xxxxxxxxxxxxxxxx"
       dataset_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

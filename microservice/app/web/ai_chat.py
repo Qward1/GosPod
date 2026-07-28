@@ -540,7 +540,13 @@ class AiChatService:
             )
             chat_dify = self.full_context_dify
         else:
-            sync_result = await self.knowledge.ensure_current()
+            # База знаний УСВО в Dify пересобирается ТОЛЬКО по кнопке «Пересобрать
+            # базу знаний» (POST /ai-knowledge/usvo/rebuild). Раньше здесь стоял
+            # ensure_current(), и первое же сообщение после любой правки карточек
+            # запускало полную перезаливку ~1500 документов — оператор ждал ответа
+            # минутами. Точечная синхронизация правок живёт в
+            # WebService._sync_usvo_knowledge (вызывается из CRUD карточек).
+            sync_result = {"ok": True, "skipped": True, "reason": "manual"}
             # Детерминированный движок: для вопросов-фильтров/счёта/агрегатов считаем точный
             # ответ по ВСЕМ карточкам (обходит лимит 32k — в контекст не лезут 1500 карточек).
             try:

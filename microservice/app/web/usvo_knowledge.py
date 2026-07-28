@@ -252,14 +252,11 @@ class UsvoCardKnowledgeSyncService:
         dify: DifyClient,
         records_provider: Callable[[], list[UsvoRecord]],
         meta: UsvoCardsMetaService,
-        *,
-        auto_sync: bool = True,
     ):
         self.store = store
         self.dify = dify
         self.records_provider = records_provider
         self.meta = meta
-        self.auto_sync = auto_sync
 
     def ready(self) -> bool:
         return self.dify.kb_ready()
@@ -345,18 +342,3 @@ class UsvoCardKnowledgeSyncService:
             }
         self.mark_current(records)
         return {"ok": True, "count": len(records)}
-
-    async def ensure_current(self) -> dict:
-        if not self.auto_sync:
-            return {"ok": True, "skipped": True, "reason": "auto_sync=false"}
-        if not self.ready():
-            return {"ok": False, "skipped": True, "error": "База знаний УСВО не настроена."}
-        try:
-            current = self.signature()
-            if self.store.get_ai_sync_state(SYNC_HASH_KEY) == current:
-                return {"ok": True, "changed": False}
-            result = await self.rebuild()
-            result["changed"] = True
-            return result
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "changed": False, "error": f"Ошибка синхронизации: {exc}"}

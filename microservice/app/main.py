@@ -93,7 +93,6 @@ async def lifespan(app: FastAPI):
             usvo_dify,
             web.all_usvo_records,
             usvo_meta,
-            auto_sync=cfg.dify.usvo_ai.auto_sync,
         )
         web.attach_usvo_knowledge(usvo_knowledge)
         # Производный SQLite-индекс карточек: фильтрация/подсчёты в БД вместо контекста
