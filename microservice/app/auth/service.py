@@ -71,8 +71,33 @@ class AuthService:
             return emp
         mode = (self.auth.mode or "demo").strip().lower()
         if mode == "kratos":
-            return await self._authenticate_kratos(identifier, password)
-        return self._authenticate_demo(identifier, password)
+            user = await self._authenticate_kratos(identifier, password)
+        else:
+            user = self._authenticate_demo(identifier, password)
+        return self._apply_saved_profile(user)
+
+    def _apply_saved_profile(self, user: dict | None) -> dict | None:
+        """Подставляет ФИО, сохранённое пользователем в «Настройках».
+
+        Имя для demo/Kratos-учёток приходит из конфига (или из identity-трейтов)
+        и при каждом входе перекрывало бы профиль, отредактированный в кабинете.
+        Профиль сотрудника лежит в его же строке `employees`, поэтому там
+        подмена не нужна.
+        """
+        if not user:
+            return user
+        sub = str(user.get("sub") or "")
+        if not sub or sub.startswith("emp:"):
+            return user
+        try:
+            profile = self.employees.get_profile_by_sub(sub, fallback_name=str(user.get("name") or ""))
+        except Exception:  # noqa: BLE001 — профиль не критичен для входа
+            log.warning("Не удалось прочитать профиль sub=%s", sub, exc_info=True)
+            return user
+        name = (profile.get("name") or "").strip()
+        if name:
+            user = {**user, "name": name}
+        return user
 
     def _authenticate_demo(self, identifier: str, password: str) -> dict | None:
         users = self.auth.demo_users or []

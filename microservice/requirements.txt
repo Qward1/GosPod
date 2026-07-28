@@ -5,3 +5,6 @@ PyYAML==6.0.2
 httpx==0.28.1
 pydantic==2.10.4
 python-multipart==0.0.20
+# Нужен pydantic 2 на Python < 3.12, чтобы разбирать аннотации вида `str | None`
+# в модулях с `from __future__ import annotations` (их в проекте большинство).
+eval_type_backport==0.4.0

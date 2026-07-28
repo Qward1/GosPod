@@ -124,10 +124,10 @@ def _period_counts(timestamps: list[float]) -> dict:
     }
 
 
-def _trend(timestamps: list[float], days: int = 14) -> list[dict]:
-    """Динамика обращений по дням за последние N дней (для мини-графика)."""
-    today = msk_today()
-    buckets = {today - dt.timedelta(days=i): 0 for i in range(days)}
+def _trend(timestamps: list[float], days: int = 14, end: dt.date | None = None) -> list[dict]:
+    """Динамика обращений по дням за N дней до `end` включительно (по умолчанию — сегодня)."""
+    end = end or msk_today()
+    buckets = {end - dt.timedelta(days=i): 0 for i in range(days)}
     for t in timestamps:
         d = msk_datetime(t).date()
         if d in buckets:
@@ -147,31 +147,39 @@ def _merge_counts(real: list[dict], fake: dict[str, int]) -> list[dict]:
 # ============================================================================
 # Временные ряды для интерактивного графика «Динамика по показателям».
 # Детерминированно: значения зависят только от даты (стабильны в течение дня).
-# Реальные обращения добавляются к базису за последние 14 дней.
+# Реальные обращения добавляются к базису за окно графика.
+#
+# Окно задаёт фронтенд (`/analytics?days=&end=`): «1 день» (тогда рисуется
+# ПОЧАСОВОЙ разрез), «7 дней» с выбором недели и «месяц» с выбором месяца.
+# Поэтому все генераторы принимают `end` — конец окна, а не жёстко «сегодня».
 # ============================================================================
 
-def _appeals_daily(days_total: int) -> list[int]:
-    """Дневной ряд обращений за `days_total` дней до сегодня (включительно).
+MAX_SERIES_DAYS = 92  # верхняя граница окна (≈ квартал) — защита от больших запросов
+
+
+def _appeals_daily(days_total: int, end: dt.date | None = None) -> list[int]:
+    """Дневной ряд обращений за `days_total` дней до `end` (включительно).
 
     Будни выше выходных + детерминированная «дрожь» по дню. Без случайностей —
-    одинаковый результат при каждом запросе в течение суток.
+    одинаковый результат при каждом запросе одного и того же окна.
     """
-    today = dt.date.today()
+    end = end or dt.date.today()
     weekday_base = [60, 58, 55, 57, 62, 30, 24]  # Пн..Вс
     out: list[int] = []
     for i in range(days_total - 1, -1, -1):
-        d = today - dt.timedelta(days=i)
+        d = end - dt.timedelta(days=i)
         wob = (d.toordinal() * 7919) % 17 - 8
         out.append(max(5, weekday_base[d.weekday()] + wob))
     return out
 
 
-def _aux_daily(seed: int, weekday_base: list[int], days: int = 14) -> list[int]:
+def _aux_daily(seed: int, weekday_base: list[int], days: int = 14,
+               end: dt.date | None = None) -> list[int]:
     """Вспомогательный дневной ряд (очные обращения, заявления и т. п.)."""
-    today = dt.date.today()
+    end = end or dt.date.today()
     out: list[int] = []
     for i in range(days - 1, -1, -1):
-        d = today - dt.timedelta(days=i)
+        d = end - dt.timedelta(days=i)
         out.append(max(0, weekday_base[d.weekday()] + (d.toordinal() * seed) % 7))
     return out
 
@@ -180,36 +188,98 @@ def _series_points(dates: list[str], values: list[int]) -> list[dict]:
     return [{"date": dates[k], "count": int(values[k])} for k in range(len(dates))]
 
 
-def _build_series(appeal_times: list[float], days: int = 14) -> list[dict]:
-    """Набор переключаемых временных рядов (x — дата, y — значение показателя)."""
-    total = 44  # запас для скользящих окон 7 и 30 дней
-    daily = _appeals_daily(total)
-    # Реальные обращения за последние `days` дней — поверх базиса.
-    real = _trend(appeal_times, days)  # oldest → newest, длина days
+# Суточный профиль нагрузки контакт-центра (ночь тихая, пик — утро и день).
+_HOURLY_WEIGHTS = [1, 1, 1, 1, 2, 3, 5, 8, 12, 14, 13, 12,
+                   11, 12, 13, 12, 10, 8, 6, 4, 3, 2, 2, 1]
+
+
+def _distribute_hourly(
+    day_total: int,
+    seed: int,
+    appeal_times: list[float] | None = None,
+    day: dt.date | None = None,
+) -> list[dict]:
+    """Почасовой разрез одних суток (подписи «HH:00») для режима «1 день».
+
+    Дневной итог раскладывается по профилю `_HOURLY_WEIGHTS`, остаток от
+    округления доводится по кругу от `seed` (чтобы сумма сошлась), затем
+    добавляются РЕАЛЬНЫЕ обращения этих суток по московскому часу.
+    """
+    day = day or msk_today()
+    wsum = sum(_HOURLY_WEIGHTS) or 1
+    base = [max(0, int(round(day_total * w / wsum))) for w in _HOURLY_WEIGHTS]
+    diff = day_total - sum(base)
+    i = 0
+    while diff != 0 and i < 24 * 8:
+        idx = (seed + i) % 24
+        if diff > 0:
+            base[idx] += 1
+            diff -= 1
+        elif base[idx] > 0:
+            base[idx] -= 1
+            diff += 1
+        i += 1
+    if appeal_times:
+        for t in appeal_times:
+            local = msk_datetime(t)
+            if local.date() == day:
+                base[local.hour] += 1
+    for h in range(24):
+        wob = ((seed * 17 + h * 13 + day.toordinal()) % 5) - 2
+        base[h] = max(0, base[h] + wob)
+    return [{"date": f"{h:02d}:00", "count": int(base[h])} for h in range(24)]
+
+
+def _build_series(
+    appeal_times: list[float],
+    days: int = 30,
+    end: dt.date | None = None,
+) -> list[dict]:
+    """Набор переключаемых временных рядов (x — дата, y — значение показателя).
+
+    У каждого ряда есть и дневные `points` (окно `days` до `end`), и `hourly` —
+    разрез последних суток окна: фронтенд переключается на него в режиме «1 день».
+    """
+    end = end or dt.date.today()
+    days = max(1, min(int(days), MAX_SERIES_DAYS))
+    # Запас слева нужен скользящим окнам 7 и 30 дней (иначе первые точки просядут).
+    total = max(60, days + 30)
+    daily = _appeals_daily(total, end=end)
+    # Реальные обращения за окно — поверх базиса.
+    real = _trend(appeal_times, days, end=end)  # oldest → newest, длина days
     for k in range(days):
         daily[total - days + k] += real[k]["count"]
 
-    today = dt.date.today()
-    dates = [(today - dt.timedelta(days=days - 1 - k)).strftime("%d.%m") for k in range(days)]
+    dates = [(end - dt.timedelta(days=days - 1 - k)).strftime("%d.%m") for k in range(days)]
 
-    base = total - days  # индекс начала окна последних `days` дней
+    base = total - days  # индекс начала окна
     day_vals = [daily[base + k] for k in range(days)]
-    week_vals = [sum(daily[base + k - 6: base + k + 1]) for k in range(days)]
-    month_vals = [sum(daily[base + k - 29: base + k + 1]) for k in range(days)]
-    in_person_vals = _aux_daily(1013, [14, 13, 12, 13, 15, 5, 3], days)
-    apps_vals = _aux_daily(2027, [9, 8, 7, 8, 10, 3, 2], days)
+    week_vals = [sum(daily[max(0, base + k - 6): base + k + 1]) for k in range(days)]
+    month_vals = [sum(daily[max(0, base + k - 29): base + k + 1]) for k in range(days)]
+    in_person_vals = _aux_daily(1013, [14, 13, 12, 13, 15, 5, 3], days, end=end)
+    apps_vals = _aux_daily(2027, [9, 8, 7, 8, 10, 3, 2], days, end=end)
 
     return [
-        {"key": "day", "label": "Обращений за день", "unit": "обр./день",
-         "points": _series_points(dates, day_vals)},
-        {"key": "week", "label": "Обращений за неделю", "unit": "обр./7 дн.",
-         "points": _series_points(dates, week_vals)},
-        {"key": "month", "label": "Обращений за месяц", "unit": "обр./30 дн.",
-         "points": _series_points(dates, month_vals)},
-        {"key": "in_person", "label": "Очных обращений в администрацию", "unit": "визитов/день",
-         "points": _series_points(dates, in_person_vals)},
-        {"key": "applications", "label": "Заявлений на меры поддержки", "unit": "заявл./день",
-         "points": _series_points(dates, apps_vals)},
+        {"key": "day", "label": "Обращений за день",
+         "unit": "обр./день", "unit_hourly": "обр./час",
+         "points": _series_points(dates, day_vals),
+         "hourly": _distribute_hourly(day_vals[-1], 401, appeal_times, day=end)},
+        {"key": "week", "label": "Обращений за неделю",
+         "unit": "обр./7 дн.", "unit_hourly": "обр./час",
+         "points": _series_points(dates, week_vals),
+         "hourly": _distribute_hourly(max(1, week_vals[-1] // 7), 503, None, day=end)},
+        {"key": "month", "label": "Обращений за месяц",
+         "unit": "обр./30 дн.", "unit_hourly": "обр./час",
+         "points": _series_points(dates, month_vals),
+         "hourly": _distribute_hourly(max(1, month_vals[-1] // 30), 607, None, day=end)},
+        {"key": "in_person", "label": "Очных обращений в администрацию",
+         "unit": "визитов/день", "unit_hourly": "визитов/час",
+         "points": _series_points(dates, in_person_vals),
+         "hourly": _distribute_hourly(in_person_vals[-1], 1013, None, day=end)},
+        {"key": "applications", "label": "Заявления на меры поддержки",
+         "unit": "заявл./день", "unit_hourly": "заявл./час",
+         "points": _series_points(dates, apps_vals),
+         "hourly": _distribute_hourly(apps_vals[-1], 2027, None, day=end)},
     ]
 
 
@@ -220,6 +290,8 @@ def build_analytics(
     appointment_count: int,
     stale_days: int,
     applications: int = 0,
+    series_days: int = 30,
+    series_end: dt.date | None = None,
 ) -> dict:
     total = len(records)
     unemployed = sum(1 for r in records if r.flags.get("unemployed"))
@@ -263,7 +335,7 @@ def build_analytics(
     return {
         "appeals": appeals,
         "appeals_trend": trend,
-        "series": _build_series(appeal_times),
+        "series": _build_series(appeal_times, days=series_days, end=series_end),
         "topics": topics,
         "support_measures": measures,
         "in_person": appointment_count + 178,

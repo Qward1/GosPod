@@ -48,6 +48,13 @@ def _g(d: dict, key: str, default: str = "") -> str:
     return str(v).strip() if v not in (None, "") else default
 
 
+def _cap(s: str) -> str:
+    """Первая буква заглавная — визуальная модель отдаёт значения вразнобой
+    («частное»/«Частное», «супруга»/«Супруга»), а в заявлении это ячейки таблицы."""
+    s = (s or "").strip()
+    return s[:1].upper() + s[1:] if s else ""
+
+
 def normalize_application(raw: dict | None) -> dict:
     """Приводит данные заявления к единой структуре с безопасными дефолтами."""
     raw = raw or {}
@@ -82,11 +89,11 @@ def normalize_application(raw: dict | None) -> dict:
             "passport_issued": _g(representative, "passport_issued"),
             "authority": _g(representative, "authority"),
         },
-        "ownership": _g(raw, "ownership", "частное"),
+        "ownership": _cap(_g(raw, "ownership", "Частное")),
         "rooms": _g(raw, "rooms"),
         "family": [
             {"fio": _g(m, "fio"), "birth_date": _g(m, "birth_date"),
-             "relation": _g(m, "relation")}
+             "relation": _cap(_g(m, "relation"))}
             for m in family if isinstance(m, dict) and (m.get("fio") or m.get("relation"))
         ],
         "providers": [

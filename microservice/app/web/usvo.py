@@ -215,7 +215,42 @@ PATRONYMICS = [
     "Александрович", "Андреевич", "Викторович", "Владимирович", "Дмитриевич",
     "Иванович", "Михайлович", "Николаевич", "Петрович", "Сергеевич",
 ]
-STATUSES = ["мобилизованный", "доброволец", "контракт", "ветеран боевых действий"]
+# Канонический справочник статусов участника СВО. Он же наполняет выпадающий
+# фильтр кабинета (`meta.usvo_statuses`) и подсветку бейджа в интерфейсе,
+# поэтому написание фиксировано и совпадает с фронтендом (usvo-status-badge).
+STATUSES = ["Контрактник", "Мобилизованный", "Доброволец", "Ветеран боевых действий"]
+
+# Одно и то же в исходных таблицах пишут по-разному («контракт», «по контракту»,
+# «ВБД»), из-за чего фильтр по каноничному значению не находил бо́льшую часть
+# карточек, а бейдж оставался серым. Ключи — нормализованные (lower, без «ё»),
+# значения — каноничное написание из STATUSES.
+STATUS_SYNONYMS = {
+    "контракт": "Контрактник",
+    "контрактник": "Контрактник",
+    "контрактной основе": "Контрактник",
+    "по контракту": "Контрактник",
+    "служит по контракту": "Контрактник",
+    "мобилизованный": "Мобилизованный",
+    "мобилизован": "Мобилизованный",
+    "доброволец": "Доброволец",
+    "добровольцем": "Доброволец",
+    "ветеран боевых действий": "Ветеран боевых действий",
+    "вбд": "Ветеран боевых действий",
+    "ветеран бд": "Ветеран боевых действий",
+}
+
+
+def canonical_status(value: str, seq: int = 0) -> str:
+    """Каноничное написание статуса.
+
+    Известный синоним → значение из STATUSES; пусто/«—» → `default_status(seq)`
+    (карточка без статуса иначе выпадала из фильтра); всё остальное отдаём как
+    есть, чтобы нестандартное значение из чужой выгрузки не потерялось.
+    """
+    s = (value or "").strip()
+    if not s or s in {"—", "-"}:
+        return default_status(seq) if seq else ""
+    return STATUS_SYNONYMS.get(s.lower().replace("ё", "е"), s)
 FAMILY = ["женат", "не женат", "разведен"]
 EDUCATION = ["среднее профессиональное", "высшее", "среднее общее"]
 PROFESSIONS = ["водитель", "электрик", "слесарь", "оператор ПК", "охранник", "механик"]
@@ -262,6 +297,15 @@ AWARDS = [
 ]
 
 
+def default_status(seq: int) -> str:
+    """Статус по порядковому номеру карточки — для строк, где он не заполнен.
+
+    Пустой статус («—») выпадал из фильтра и из подсветки бейджа, поэтому вместо
+    прочерка подставляем детерминированный статус из справочника.
+    """
+    return STATUSES[(seq - 1) % len(STATUSES)]
+
+
 def _synthetic_name(seq: int) -> str:
     return (
         f"{LAST_NAMES[(seq - 1) % len(LAST_NAMES)]} "
@@ -284,10 +328,10 @@ def _synthetic_value(header: str, seq: int) -> str:
         month = 1 + (seq * 5) % 12
         day = 1 + (seq * 11) % 28
         return f"{day:02d}.{month:02d}.{year}"
-    if h == "статус":
-        return STATUSES[(seq - 1) % len(STATUSES)]
+    if h == "статус" or h.startswith("статус "):
+        return default_status(seq)
     if "мобилизованн" in h or "доброволец" in h or "контракт" in h:
-        return STATUSES[(seq + 1) % 3]
+        return default_status(seq + 1)
     if "ик/" in h or "чвк" in h or "сизо" in h:
         return "нет"
     if "примечание к статусу" in h:
@@ -416,13 +460,13 @@ class UsvoStore:
             name = display_value(values, idx.get("name")) or _synthetic_name(seq)
 
             call_date = display_value(values, idx.get("call_date"))
-            status = display_value(values, idx.get("status"))
+            status = canonical_status(display_value(values, idx.get("status")), seq)
             rec = UsvoRecord(
                 id=seq,
                 name=name,
                 short_name=_short_name(name),
                 initials=_initials(name),
-                status=status or "—",
+                status=status,
                 call_date=call_date,
                 birth_date=display_value(values, idx.get("birth")),
                 phone=display_value(values, idx.get("phone")),
@@ -582,7 +626,7 @@ def record_from_fields(
     """
     clean = [(l, v) for (l, v) in fields if (v or "").strip()]
     name = find_field_value(clean, "name") or _synthetic_name(rec_id)
-    status = find_field_value(clean, "status") or "—"
+    status = canonical_status(find_field_value(clean, "status"), rec_id)
     call_date = find_field_value(clean, "call_date")
     rec = UsvoRecord(
         id=rec_id,

@@ -35,6 +35,7 @@ class ChatCreateBody(BaseModel):
 class ChatUpdateBody(BaseModel):
     title: str | None = None
     answerType: str | None = None
+    pinned: bool | None = None
 
 
 class MessageCreateBody(BaseModel):
@@ -97,6 +98,7 @@ async def update_chat(
             chat_id,
             title=body.title,
             answer_type=body.answerType,
+            pinned=body.pinned,
         )}
     except RuntimeError as exc:
         _raise_known(exc)

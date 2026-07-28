@@ -42,10 +42,10 @@ _POSITIVE = (
 )
 
 _SENTIMENT_META = {
-    "positive":   {"label": "Позитивное",  "emoji": "😊", "tone": "ok"},
-    "neutral":    {"label": "Нейтральное", "emoji": "😐", "tone": "info"},
-    "anxious":    {"label": "Тревожное",   "emoji": "😟", "tone": "warn"},
-    "aggressive": {"label": "Напряжённое", "emoji": "😠", "tone": "danger"},
+    "positive":   {"label": "Позитивный",  "emoji": "😊", "tone": "ok"},
+    "neutral":    {"label": "Нейтральный", "emoji": "😐", "tone": "info"},
+    "anxious":    {"label": "Тревожный",   "emoji": "😟", "tone": "warn"},
+    "aggressive": {"label": "Напряжённый", "emoji": "😠", "tone": "danger"},
 }
 
 

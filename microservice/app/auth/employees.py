@@ -5,6 +5,12 @@
 `auth.employees_db`). Пароли не хранятся в открытом виде: PBKDF2-HMAC-SHA256 с
 индивидуальной солью на каждую запись.
 
+Здесь же живёт ПРОФИЛЬ текущего пользователя кабинета (раздел «Настройки» →
+«Данные аккаунта»): ФИО по частям + дата рождения + телефон. Для сотрудника
+(`sub = "emp:<id>"`) профиль — это его же строка в `employees`, для админа из
+`auth.demo_users`/Kratos — отдельная таблица `user_profiles` (ключ — `sub`),
+т.к. своей строки в `employees` у него нет.
+
 Используется только stdlib sqlite3 + hashlib. Соединение открывается на каждую
 операцию — нагрузка кабинета это с запасом выдерживает.
 """
@@ -38,6 +44,28 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(digest.hex(), hash_hex)
     except Exception:  # noqa: BLE001
         return False
+
+
+def compose_name(last_name: str = "", first_name: str = "", middle_name: str = "") -> str:
+    """«Иванов», «Иван», «Иванович» → «Иванов Иван Иванович» (пустые пропускаются)."""
+    return " ".join(p for p in [last_name.strip(), first_name.strip(), middle_name.strip()] if p)
+
+
+def split_name(name: str) -> tuple[str, str, str]:
+    """Обратная операция: «Иванов Иван Иванович» → (фамилия, имя, отчество).
+
+    Одиночное слово считаем ИМЕНЕМ (в кабинете так подписаны демо-учётки вроде
+    «Оператор»), два слова — «Фамилия Имя», три и больше — остаток уходит в
+    отчество (двойные отчества/составные части не теряются).
+    """
+    parts = [p for p in (name or "").strip().split() if p]
+    if len(parts) >= 3:
+        return parts[0], parts[1], " ".join(parts[2:])
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    if len(parts) == 1:
+        return "", parts[0], ""
+    return "", "", ""
 
 
 class EmployeeStore:
@@ -76,12 +104,67 @@ class EmployeeStore:
                 );
                 """
             )
+            # Авто-миграция существующих БД: ФИО по частям + дата рождения.
+            self._ensure_column(c, "employees", "last_name", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(c, "employees", "first_name", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(c, "employees", "middle_name", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(c, "employees", "birth_date", "TEXT NOT NULL DEFAULT ''")
+            # Профиль пользователя БЕЗ строки в employees (админ из demo_users/Kratos).
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    sub         TEXT PRIMARY KEY,
+                    last_name   TEXT NOT NULL DEFAULT '',
+                    first_name  TEXT NOT NULL DEFAULT '',
+                    middle_name TEXT NOT NULL DEFAULT '',
+                    birth_date  TEXT NOT NULL DEFAULT '',
+                    phone       TEXT NOT NULL DEFAULT '',
+                    updated_at  REAL NOT NULL
+                );
+                """
+            )
+            self._backfill_fio(c)
+
+    @staticmethod
+    def _ensure_column(c: sqlite3.Connection, table: str, column: str, typedef: str) -> None:
+        cols = {row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
+
+    @staticmethod
+    def _backfill_fio(c: sqlite3.Connection) -> None:
+        """Разбирает `name` уже заведённых сотрудников на ФИО-части (однократно)."""
+        rows = c.execute(
+            "SELECT id, name, last_name, first_name, middle_name FROM employees"
+        ).fetchall()
+        for row in rows:
+            if (row["last_name"] or "").strip() or (row["first_name"] or "").strip():
+                continue
+            last_name, first_name, middle_name = split_name(row["name"] or "")
+            if not (last_name or first_name or middle_name):
+                continue
+            c.execute(
+                "UPDATE employees SET last_name=?, first_name=?, middle_name=? WHERE id=?",
+                (last_name, first_name, middle_name, row["id"]),
+            )
 
     # ---- чтение -------------------------------------------------------------
 
     @staticmethod
-    def _public(row: sqlite3.Row) -> dict:
+    def _fio_from_row(row: sqlite3.Row) -> tuple[str, str, str]:
+        """ФИО-части строки; если колонки ещё пустые — разбираем `name` на лету."""
+        last_name = (row["last_name"] if "last_name" in row.keys() else "") or ""
+        first_name = (row["first_name"] if "first_name" in row.keys() else "") or ""
+        middle_name = (row["middle_name"] if "middle_name" in row.keys() else "") or ""
+        if last_name.strip() or first_name.strip() or middle_name.strip():
+            return last_name.strip(), first_name.strip(), middle_name.strip()
+        return split_name(row["name"] or "")
+
+    @classmethod
+    def _public(cls, row: sqlite3.Row) -> dict:
         """Запись без хеша пароля — для отдачи во фронтенд."""
+        last_name, first_name, middle_name = cls._fio_from_row(row)
+        birth_date = (row["birth_date"] if "birth_date" in row.keys() else "") or ""
         return {
             "id": row["id"],
             "name": row["name"],
@@ -90,6 +173,10 @@ class EmployeeStore:
             "phone": row["phone"],
             "active": bool(row["active"]),
             "created_at": row["created_at"],
+            "last_name": last_name,
+            "first_name": first_name,
+            "middle_name": middle_name,
+            "birth_date": birth_date.strip(),
         }
 
     def list_all(self) -> list[dict]:
@@ -121,6 +208,132 @@ class EmployeeStore:
                 "SELECT * FROM employees WHERE login=? COLLATE NOCASE", ((login or "").strip(),)
             ).fetchone()
 
+    # ---- профиль текущего пользователя кабинета -----------------------------
+
+    def get_profile_by_sub(self, sub: str, fallback_name: str = "") -> dict:
+        """Профиль владельца сессии для раздела «Настройки».
+
+        `sub = "emp:<id>"` — читаем строку сотрудника; иначе (админ из
+        `auth.demo_users` / Kratos) — таблицу `user_profiles`. Если профиль ещё
+        не заполнен, разбираем на части отображаемое имя из сессии
+        (`fallback_name`), чтобы форма открывалась не пустой.
+        """
+        sub = (sub or "").strip()
+        if sub.startswith("emp:"):
+            try:
+                emp_id = int(sub.split(":", 1)[1])
+            except ValueError:
+                emp_id = 0
+            emp = self.get(emp_id) if emp_id else None
+            if emp:
+                return {
+                    "sub": sub,
+                    "login": emp.get("login") or "",
+                    "last_name": emp.get("last_name") or "",
+                    "first_name": emp.get("first_name") or "",
+                    "middle_name": emp.get("middle_name") or "",
+                    "birth_date": emp.get("birth_date") or "",
+                    "phone": emp.get("phone") or "",
+                    "name": emp.get("name") or "",
+                    "editable": True,
+                }
+
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM user_profiles WHERE sub=?", (sub,)).fetchone()
+        if row:
+            name = compose_name(row["last_name"], row["first_name"], row["middle_name"]) \
+                or fallback_name
+            return {
+                "sub": sub,
+                "login": "",
+                "last_name": row["last_name"] or "",
+                "first_name": row["first_name"] or "",
+                "middle_name": row["middle_name"] or "",
+                "birth_date": row["birth_date"] or "",
+                "phone": row["phone"] or "",
+                "name": name,
+                "editable": True,
+            }
+
+        last_name, first_name, middle_name = split_name(fallback_name)
+        return {
+            "sub": sub,
+            "login": "",
+            "last_name": last_name,
+            "first_name": first_name,
+            "middle_name": middle_name,
+            "birth_date": "",
+            "phone": "",
+            "name": fallback_name or compose_name(last_name, first_name, middle_name),
+            "editable": True,
+        }
+
+    def update_profile_by_sub(
+        self,
+        sub: str,
+        *,
+        last_name: str = "",
+        first_name: str = "",
+        middle_name: str = "",
+        birth_date: str = "",
+        phone: str | None = None,
+    ) -> dict:
+        """Сохраняет профиль владельца сессии; `name` пересобирается из частей.
+
+        `phone=None` — «не трогать» (текущее значение сохраняется), пустая строка
+        — очистить. Для сотрудника обновление идёт в его строку `employees`,
+        поэтому новое ФИО сразу видно и в списке ответственных.
+        """
+        sub = (sub or "").strip()
+        last_name = (last_name or "").strip()
+        first_name = (first_name or "").strip()
+        middle_name = (middle_name or "").strip()
+        birth_date = (birth_date or "").strip()
+        name = compose_name(last_name, first_name, middle_name)
+        if not name:
+            raise ValueError("Укажите фамилию или имя")
+
+        if sub.startswith("emp:"):
+            try:
+                emp_id = int(sub.split(":", 1)[1])
+            except ValueError as exc:
+                raise ValueError("Профиль недоступен") from exc
+            if self.get(emp_id) is None:
+                raise ValueError("Сотрудник не найден")
+            sets = ["last_name=?", "first_name=?", "middle_name=?",
+                    "birth_date=?", "name=?", "updated_at=?"]
+            args: list = [last_name, first_name, middle_name, birth_date, name, time.time()]
+            if phone is not None:
+                sets.append("phone=?")
+                args.append(phone.strip())
+            args.append(emp_id)
+            with self._conn() as c:
+                c.execute(f"UPDATE employees SET {', '.join(sets)} WHERE id=?", args)
+            return self.get_profile_by_sub(sub, name)
+
+        now = time.time()
+        phone_val = (phone or "").strip() if phone is not None else None
+        with self._conn() as c:
+            existing = c.execute("SELECT phone FROM user_profiles WHERE sub=?", (sub,)).fetchone()
+            if phone_val is None:
+                phone_val = (existing["phone"] if existing else "") or ""
+            c.execute(
+                """
+                INSERT INTO user_profiles
+                    (sub, last_name, first_name, middle_name, birth_date, phone, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sub) DO UPDATE SET
+                    last_name=excluded.last_name,
+                    first_name=excluded.first_name,
+                    middle_name=excluded.middle_name,
+                    birth_date=excluded.birth_date,
+                    phone=excluded.phone,
+                    updated_at=excluded.updated_at
+                """,
+                (sub, last_name, first_name, middle_name, birth_date, phone_val, now),
+            )
+        return self.get_profile_by_sub(sub, name)
+
     # ---- запись -------------------------------------------------------------
 
     def create(self, name: str, login: str, password: str,
@@ -131,13 +344,15 @@ class EmployeeStore:
             raise ValueError("Укажите имя, логин и пароль")
         if self.get_by_login(login) is not None:
             raise ValueError("Логин уже занят")
+        last_name, first_name, middle_name = split_name(name)
         now = time.time()
         with self._conn() as c:
             cur = c.execute(
                 "INSERT INTO employees(name, login, password_hash, position, phone, "
-                "active, created_at, updated_at) VALUES(?,?,?,?,?,1,?,?)",
+                "last_name, first_name, middle_name, birth_date, "
+                "active, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)",
                 (name, login, hash_password(password), (position or "").strip(),
-                 (phone or "").strip(), now, now),
+                 (phone or "").strip(), last_name, first_name, middle_name, "", now, now),
             )
             emp_id = cur.lastrowid
         return self.get(emp_id)  # type: ignore[return-value]
@@ -150,7 +365,11 @@ class EmployeeStore:
         sets: list[str] = []
         args: list = []
         if name is not None and name.strip():
+            last_name, first_name, middle_name = split_name(name)
             sets.append("name=?"); args.append(name.strip())
+            sets.append("last_name=?"); args.append(last_name)
+            sets.append("first_name=?"); args.append(first_name)
+            sets.append("middle_name=?"); args.append(middle_name)
         if login is not None and login.strip():
             other = self.get_by_login(login)
             if other is not None and int(other["id"]) != int(emp_id):

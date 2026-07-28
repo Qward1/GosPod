@@ -152,6 +152,7 @@ def _chat_dict(row) -> dict:
         "id": int(data["id"]),
         "title": data.get("title") or "Новый чат",
         "answerType": data.get("answer_type") or "text",
+        "pinned": bool(int(data.get("pinned") or 0)),
         "createdAt": float(data.get("created_at") or 0),
         "updatedAt": float(data.get("updated_at") or 0),
         "messageCount": int(data.get("message_count") or 0),
@@ -367,6 +368,7 @@ class AiChatService:
         *,
         title: str | None = None,
         answer_type: str | None = None,
+        pinned: bool | None = None,
     ) -> dict:
         clean_title = None
         if title is not None:
@@ -375,7 +377,7 @@ class AiChatService:
                 raise AiChatValidation("Название чата не может быть пустым")
         clean_type = normalize_answer_type(answer_type) if answer_type is not None else None
         if not self.store.update_ai_chat(
-            chat_id, user_id, title=clean_title, answer_type=clean_type
+            chat_id, user_id, title=clean_title, answer_type=clean_type, pinned=pinned,
         ):
             raise AiChatNotFound("Чат не найден")
         return self.get_chat(user_id, chat_id)

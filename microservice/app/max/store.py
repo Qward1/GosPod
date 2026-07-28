@@ -154,6 +154,7 @@ class Store:
                     user_id     TEXT NOT NULL,
                     title       TEXT NOT NULL DEFAULT 'Новый чат',
                     answer_type TEXT NOT NULL DEFAULT 'text',
+                    pinned      INTEGER NOT NULL DEFAULT 0,
                     created_at  REAL NOT NULL,
                     updated_at  REAL NOT NULL
                 );
@@ -246,6 +247,8 @@ class Store:
             # истории) и отметка о повторном уведомлении операторов о просрочке.
             self._ensure_column(c, "escalations", "phone", "TEXT")
             self._ensure_column(c, "escalations", "sla_notified_at", "REAL")
+            # Закреплённые диалоги «ИИ ассистента» — всегда в начале списка.
+            self._ensure_column(c, "ai_chats", "pinned", "INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
@@ -850,7 +853,7 @@ class Store:
                            AS message_count
                 FROM ai_chats c
                 WHERE c.user_id = ?
-                ORDER BY c.updated_at DESC, c.id DESC
+                ORDER BY COALESCE(c.pinned, 0) DESC, c.updated_at DESC, c.id DESC
                 LIMIT ?
                 """,
                 (str(user_id), limit),
@@ -870,6 +873,7 @@ class Store:
         *,
         title: str | None = None,
         answer_type: str | None = None,
+        pinned: bool | None = None,
     ) -> bool:
         sets: list[str] = []
         values: list = []
@@ -879,10 +883,16 @@ class Store:
         if answer_type is not None:
             sets.append("answer_type = ?")
             values.append(answer_type)
+        if pinned is not None:
+            sets.append("pinned = ?")
+            values.append(1 if pinned else 0)
         if not sets:
             return self.get_ai_chat(chat_id, user_id) is not None
-        sets.append("updated_at = ?")
-        values.append(time.time())
+        # Закрепление НЕ поднимает чат в списке «последних»: updated_at трогаем
+        # только при реальном изменении содержимого (заголовок / формат ответа).
+        if title is not None or answer_type is not None:
+            sets.append("updated_at = ?")
+            values.append(time.time())
         values.extend([chat_id, str(user_id)])
         with self._conn() as c:
             cur = c.execute(

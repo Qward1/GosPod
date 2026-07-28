@@ -13,7 +13,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.auth.employees import EmployeeStore
@@ -217,12 +217,6 @@ if get_config().web.enabled and os.path.isdir(_STATIC_DIR):
         "Expires": "0",
     }
 
-    def _web_html(filename: str) -> FileResponse:
-        return FileResponse(
-            os.path.join(_STATIC_DIR, filename),
-            headers=_NO_CACHE_HEADERS,
-        )
-
     def _web_index() -> HTMLResponse:
         """Отдаём index.html без правок. <base href> вычисляет клиентский скрипт
         внутри самого index.html из реального window.location.pathname — он один
@@ -230,29 +224,44 @@ if get_config().web.enabled and os.path.isdir(_STATIC_DIR):
         корректно обрабатывает deep-link /usvo/cards/<id>. Серверу внешний префикс
         неизвестен (proxy его срезает), поэтому сервер <base> НЕ внедряет: иначе он
         перебивал бы (правило «побеждает первый <base>») правильный клиентский base,
-        и ассеты грузились бы из корня хоста (/application/styles.css вместо
-        /jnserver/1103/application/styles.css → 404, нестилизованная страница)."""
+        и ассеты грузились бы из корня хоста (/application/assets/index.js вместо
+        /jnserver/1103/application/assets/index.js → 404, белая страница)."""
         with open(os.path.join(_STATIC_DIR, "index.html"), "r", encoding="utf-8") as f:
             html = f.read()
         return HTMLResponse(html, headers=_NO_CACHE_HEADERS)
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/index.html", include_in_schema=False)
-    @app.get("/application", include_in_schema=False)
-    @app.get("/application/", include_in_schema=False)
-    @app.get("/application/index.html", include_in_schema=False)
-    async def web_index():
+    # Клиентские маршруты SPA (react-router). Сервер отдаёт на них один и тот же
+    # index.html — иначе перезагрузка страницы или прямая ссылка возвращала бы 404
+    # от StaticFiles. Список обязан совпадать с <Route> в frontend/src/App.tsx и с
+    # SPA_ROUTE_RE в frontend/src/lib/utils.ts (там из пути вычисляется APP_BASE).
+    _SPA_ROUTES = [
+        "/", "/index.html",
+        "/login", "/login.html",
+        "/cards", "/ai-chat", "/applications", "/analytics",
+        "/broadcast", "/audit", "/settings",
+    ]
+
+    async def _spa() -> HTMLResponse:
         return _web_index()
 
-    @app.get("/usvo/cards/{rec_id}", include_in_schema=False)
-    @app.get("/application/usvo/cards/{rec_id}", include_in_schema=False)
-    async def web_usvo_card(rec_id: int):
+    async def _spa_card(rec_id: int) -> HTMLResponse:
+        # rec_id разбирает уже клиент (react-router), серверу он нужен только
+        # затем, чтобы путь совпал и не ушёл в StaticFiles → 404.
         return _web_index()
 
-    @app.get("/login.html", include_in_schema=False)
-    @app.get("/application/login.html", include_in_schema=False)
-    async def web_login():
-        return _web_html("login.html")
+    # Каждый маршрут регистрируется дважды: напрямую и под /application — кабинет
+    # разворачивается и в корне, и за reverse-proxy, отдающим его по подпути.
+    for _prefix in ("", "/application"):
+        _paths = [f"{_prefix}{r}" for r in _SPA_ROUTES]
+        if _prefix:
+            # Голый «/application» без слэша — тоже точка входа.
+            _paths.append(_prefix)
+        else:
+            _paths = ["/" if p == "" else p for p in _paths]
+        for _path in dict.fromkeys(_paths):
+            app.add_api_route(_path or "/", _spa, methods=["GET"], include_in_schema=False)
+        app.add_api_route(f"{_prefix}/usvo/cards/{{rec_id}}", _spa_card,
+                          methods=["GET"], include_in_schema=False)
 
     app.mount("/application", StaticFiles(directory=_STATIC_DIR, html=True), name="web-application")
     app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="web-static")

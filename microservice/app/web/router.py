@@ -4,10 +4,13 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
 from app.auth.deps import require_user
+from app.web.analytics import MAX_SERIES_DAYS
 from app.web.service import WebService
 
 # Все эндпоинты кабинета защищены сессией (см. app/auth). Логин-эндпоинты вынесены
@@ -265,8 +268,18 @@ async def application_docx(request: Request, application_id: int) -> Response:
 # ---- аналитика -------------------------------------------------------------
 
 @router.get("/analytics")
-async def analytics(request: Request) -> dict:
-    return _svc(request).analytics()
+async def analytics(request: Request, days: int = 30, end: str | None = None) -> dict:
+    """Дашборд. `days`/`end` (YYYY-MM-DD) задают окно графика «Динамика по
+    показателям»: 1 день / 7 дней / месяц с выбором конкретного периода."""
+    end_date = None
+    if end:
+        try:
+            end_date = dt.date.fromisoformat(end)
+        except ValueError as exc:
+            raise HTTPException(status_code=400,
+                                detail="Некорректная дата end (ожидается YYYY-MM-DD)") from exc
+    days = max(1, min(int(days or 30), MAX_SERIES_DAYS))
+    return _svc(request).analytics(series_days=days, series_end=end_date)
 
 
 # ---- база знаний (загрузка материалов в Dify Dataset) ----------------------

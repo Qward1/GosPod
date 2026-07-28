@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app.auth.deps import current_user
+from app.auth.deps import current_user, require_user
 from app.auth.service import COOKIE_NAME, AuthBackendUnavailable, AuthService, is_admin_role
 
 router = APIRouter(prefix="/api/web/auth", tags=["auth"])
@@ -23,6 +23,14 @@ def _svc(request: Request) -> AuthService:
 class LoginBody(BaseModel):
     identifier: str
     password: str
+
+
+class ProfileUpdateBody(BaseModel):
+    last_name: str = ""
+    first_name: str = ""
+    middle_name: str = ""
+    birth_date: str = ""
+    phone: str | None = None
 
 
 @router.get("/config")
@@ -47,6 +55,59 @@ async def whoami(request: Request) -> dict:
         "sub": user.get("sub"),
         "is_admin": is_admin_role(user.get("role")),
     }}
+
+
+@router.get("/profile")
+async def get_profile(request: Request) -> dict:
+    """Профиль владельца сессии (ФИО по частям, дата рождения, телефон)."""
+    user = require_user(request)
+    svc = _svc(request)
+    profile = svc.employees.get_profile_by_sub(
+        str(user.get("sub") or ""),
+        fallback_name=str(user.get("name") or ""),
+    )
+    return {"profile": profile}
+
+
+@router.put("/profile")
+async def update_profile(request: Request, body: ProfileUpdateBody, response: Response) -> dict:
+    """Сохраняет профиль и ПЕРЕВЫПУСКАЕТ cookie-сессию с новым отображаемым именем.
+
+    Имя лежит внутри подписанного токена, поэтому без перевыпуска шапка кабинета
+    и подпись ответов показывали бы старое ФИО до следующего входа.
+    """
+    user = require_user(request)
+    svc = _svc(request)
+    try:
+        profile = svc.employees.update_profile_by_sub(
+            str(user.get("sub") or ""),
+            last_name=body.last_name,
+            first_name=body.first_name,
+            middle_name=body.middle_name,
+            birth_date=body.birth_date,
+            phone=body.phone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    name = profile.get("name") or user.get("name")
+    role = user.get("role") or "Оператор"
+    token = svc.issue_token({"sub": user.get("sub"), "name": name, "role": role})
+    response.set_cookie(
+        COOKIE_NAME, token,
+        max_age=svc.auth.session_ttl_hours * 3600,
+        httponly=True, samesite="lax", path="/",
+    )
+    return {
+        "ok": True,
+        "profile": profile,
+        "user": {
+            "name": name,
+            "role": role,
+            "sub": user.get("sub"),
+            "is_admin": is_admin_role(role),
+        },
+    }
 
 
 @router.post("/login")
