@@ -244,3 +244,54 @@ def test_spa_routes_match_frontend_router():
             assert "/usvo/cards/{rec_id}" in main_src
             continue
         assert f'"{route}"' in main_src, f"маршрут {route} не отдаётся сервером"
+
+
+# ---- Высота раскладки ------------------------------------------------------
+
+def _frontend_src(*parts: str) -> str:
+    """Исходник фронтенда без блочных комментариев.
+
+    Комментарии вырезаем, чтобы объяснение «почему не svh» рядом с кодом само
+    не роняло проверку ниже.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "frontend", "src", *parts)
+    if not os.path.exists(path):  # исходники фронтенда могут не поставляться
+        pytest.skip(f"frontend/src/{'/'.join(parts)} отсутствует")
+    with open(path, encoding="utf-8") as f:
+        return re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
+
+
+def test_layout_height_does_not_depend_on_svh():
+    """Высота кабинета обязана держаться на height:100%, а не на 100svh.
+
+    body/#root закрыты overflow:hidden. Если единицы *vh не резолвятся
+    (Chrome/Edge < 108, старые сборки Яндекс.Браузера, Safari < 15.4), высота
+    становится auto: сайдбар растягивается по всей длине таблицы, блок аккаунта
+    уезжает за нижнюю границу окна и становится недоступен. Цепочка
+    html → body → #root → shell на процентах работает в любом браузере.
+    """
+    css = _frontend_src("index.css")
+    assert "html," in css or "html {" in css, "html обязан получить высоту — иначе 100% не от чего считать"
+
+    shell = _frontend_src("components", "layout", "app-shell.tsx")
+    login = _frontend_src("pages", "login.tsx")
+    chat = _frontend_src("pages", "ai-chat.tsx")
+    for name, src in (("index.css", css), ("app-shell.tsx", shell), ("login.tsx", login), ("ai-chat.tsx", chat)):
+        for unit in ("svh", "dvh", "lvh"):
+            assert unit not in src, f"{name}: раскладка снова опирается на {unit}"
+
+
+def test_sidebar_nav_scrolls_instead_of_clipping():
+    """Пункты меню на низком окне обязаны прокручиваться, а не обрезаться.
+
+    overflow-hidden на контейнере nav молча прятал у админа «Рассылки» и
+    «Журнал действий» — без скроллбара и без всякого признака, что они есть.
+    """
+    shell = _frontend_src("components", "layout", "app-shell.tsx")
+    nav_block = shell[shell.index("<nav"): shell.index("</nav>")]
+    container = shell[: shell.index("<nav")].rsplit("<div", 1)[-1]
+    assert "overflow-y-auto" in container, "контейнер меню обязан прокручиваться"
+    assert nav_block, "не нашли <nav> — изменился формат app-shell.tsx"

@@ -15,6 +15,7 @@ Thumbs.db
 .claude/
 .agents/
 .codex/
+.playwright-mcp/
 
 # ── Local config & secrets (публикуется только config.example.yaml) ──
 config.yaml

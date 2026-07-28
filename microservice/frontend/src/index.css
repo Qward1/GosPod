@@ -104,14 +104,26 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /*
+    Высота кабинета держится на процентной цепочке html → body → #root → shell.
+    Единицы 100svh/100dvh здесь НЕ используются намеренно: браузеры без их
+    поддержки (Chrome/Edge < 108, старые сборки Яндекс.Браузера, Safari < 15.4)
+    отбрасывают объявление целиком, высота становится auto — и при
+    overflow:hidden ниже сайдбар растягивается на всю длину таблицы, а блок
+    аккаунта уезжает за нижнюю границу окна без возможности доскроллить.
+    height:100% от корня работает везде и даёт ровно тот же результат.
+  */
   html {
     @apply font-sans antialiased;
+    height: 100%;
   }
   body {
-    @apply h-svh overflow-hidden bg-background text-foreground;
+    @apply overflow-hidden bg-background text-foreground;
+    height: 100%;
   }
   #root {
-    @apply h-svh overflow-hidden;
+    @apply overflow-hidden;
+    height: 100%;
   }
   input[type="checkbox"],
   input[type="radio"] {

@@ -380,7 +380,11 @@ export function AiChatPage() {
 
   return (
     <>
-      <div className="relative -m-6 flex h-[calc(100svh-5rem)] min-h-0 flex-col overflow-hidden">
+      {/* Чат занимает <main> целиком: -m-6 гасит его padding, а calc(100% + 3rem)
+          возвращает эти 24px сверху и снизу обратно в высоту. Считаем от
+          родителя, а не от 100svh, — тогда высота верна в любом браузере и не
+          разъезжается, если поменяется высота шапки. */}
+      <div className="relative -m-6 flex h-[calc(100%+3rem)] min-h-0 flex-col overflow-hidden">
         <header className="flex items-center justify-between gap-3 border-b px-6 py-3">
           <div className="flex min-w-0 items-center gap-1">
             <h2 className="truncate text-sm font-medium">

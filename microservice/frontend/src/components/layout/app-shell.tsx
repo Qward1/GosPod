@@ -78,7 +78,7 @@ export function AppShell() {
 
   if (loading) {
     return (
-      <div className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         Загрузка кабинета…
       </div>
     )
@@ -86,7 +86,7 @@ export function AppShell() {
 
   if (error) {
     return (
-      <div className="flex min-h-svh flex-col items-center justify-center gap-2 p-8 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
         <h1 className="text-xl font-semibold">Сервис недоступен</h1>
         <p className="text-muted-foreground">{error}</p>
       </div>
@@ -94,7 +94,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-svh overflow-hidden bg-background">
+    <div className="flex h-full overflow-hidden bg-background">
       <aside className="flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
         <div className="flex h-20 shrink-0 items-center gap-3 border-b border-sidebar-border px-4">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
@@ -105,7 +105,12 @@ export function AppShell() {
             <div className="truncate text-xs text-muted-foreground">Господдержка · МО</div>
           </div>
         </div>
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-4 py-3">
+        {/*
+          Меню прокручивается, а не обрезается: на низком окне (или при крупном
+          масштабе страницы) overflow-hidden молча прятал у админа «Рассылки» и
+          «Журнал действий» — без скроллбара и без намёка, что они есть.
+        */}
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
           <nav className="flex w-full flex-col gap-1">
             {NAV.filter((n) => !n.admin || isAdmin).map((item) => {
               const Icon = item.icon

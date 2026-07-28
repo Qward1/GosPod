@@ -107,9 +107,11 @@ export function LoginPage() {
   const current = SLIDES[slide]
 
   return (
-    <div className="flex min-h-svh bg-background">
+    /* body закрыт overflow:hidden, поэтому прокрутку экрана входа держит он сам:
+       иначе на низком окне форма уходила бы под нижнюю границу без скролла. */
+    <div className="flex h-full overflow-y-auto bg-background">
       <aside className="relative hidden w-[48%] shrink-0 p-4 lg:block xl:w-[52%]">
-        <div className="login-hero relative flex h-full min-h-[calc(100svh-2rem)] flex-col overflow-hidden rounded-[1.75rem] bg-[#070b14] text-white">
+        <div className="login-hero relative flex h-full flex-col overflow-hidden rounded-[1.75rem] bg-[#070b14] text-white">
           <div className="login-hero-grain pointer-events-none absolute inset-0 opacity-[0.35]" />
           <div className="login-hero-beam login-hero-beam-a pointer-events-none absolute inset-0" />
           <div className="login-hero-beam login-hero-beam-b pointer-events-none absolute inset-0" />
