@@ -116,7 +116,8 @@ export type Measure = {
   id: string
   title: string
   description?: string
-  documents?: string[]
+  /** С бэкенда приходят объекты {title, sort_order}; строки принимаются на вход. */
+  documents?: (string | { title?: string; sort_order?: number })[]
   placeholders?: { key: string; label: string }[]
   llm_hint?: string
   category?: string

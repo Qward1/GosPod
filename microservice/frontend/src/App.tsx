@@ -1,4 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
+import * as React from "react"
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { APP_BASE } from "@/lib/api"
 import { AppProvider } from "@/hooks/use-app"
 import { AppShell } from "@/components/layout/app-shell"
@@ -11,6 +12,23 @@ import { AnalyticsPage } from "@/pages/analytics"
 import { BroadcastPage } from "@/pages/broadcast"
 import { AuditPage } from "@/pages/audit"
 import { SettingsPage } from "@/pages/settings"
+
+/**
+ * Держит завершающий слэш на главной: react-router для index-маршрута ставит
+ * адрес ровно в basename (`/jnserver/8/application`), а кабинет должен жить по
+ * `/jnserver/8/application/` — иначе относительные ссылки и `<base href>`
+ * считаются от родительского каталога. Правим адрес через replaceState, без
+ * перезагрузки; APP_BASE от этого не меняется (appBaseFromPath режет слэши).
+ */
+function TrailingSlashKeeper() {
+  const location = useLocation()
+  React.useEffect(() => {
+    if (!APP_BASE || window.location.pathname !== APP_BASE) return
+    const url = `${APP_BASE}/${window.location.search}${window.location.hash}`
+    window.history.replaceState(window.history.state, "", url)
+  }, [location])
+  return null
+}
 
 function ProtectedShell() {
   return (
@@ -25,6 +43,7 @@ export default function App() {
 
   return (
     <BrowserRouter basename={basename}>
+      <TrailingSlashKeeper />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedShell />}>

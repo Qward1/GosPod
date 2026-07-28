@@ -3,6 +3,13 @@ import { appBaseFromPath } from "@/lib/utils"
 export const APP_BASE = appBaseFromPath(window.location.pathname)
 export const API_BASE = `${APP_BASE}/api/web`
 
+/** Главная кабинета — ВСЕГДА со слэшем на конце (`…/application/`, а не
+ *  `…/application`). React Router для index-маршрута отдаёт голый basename, и за
+ *  reverse-proxy такой адрес — это «файл application» в каталоге `/jnserver/8/`:
+ *  относительные ассеты и `<base href>` считаются от родителя, а не от кабинета.
+ *  Отсюда редиректим после входа и правим адрес главной (см. App.tsx). */
+export const APP_HOME = `${APP_BASE}/`
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ArrowDown, ArrowUp, BookOpen, Download, Filter, Loader2, MoreVertical, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, BookOpen, Download, FileUp, Filter, Loader2, MoreVertical, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { api, exportUrl } from "@/lib/api"
 import type { Application, Measure } from "@/lib/types"
@@ -84,6 +84,30 @@ const EMPTY_MEASURE_FILTERS: MeasureFilters = {
   documents: "",
 }
 
+/** Форма меры поддержки — набор полей совпадает с телом POST/PUT
+ *  /settings/support-measures (+ отдельной загрузкой .docx-шаблона). */
+type MeasureForm = {
+  title: string
+  description: string
+  llm_hint: string
+  documents: string[]
+  placeholders: { key: string; label: string }[]
+  active: boolean
+}
+
+const EMPTY_MEASURE_FORM: MeasureForm = {
+  title: "",
+  description: "",
+  llm_hint: "",
+  documents: [""],
+  placeholders: [],
+  active: true,
+}
+
+function documentTitle(doc: string | { title?: string } | null | undefined) {
+  return typeof doc === "string" ? doc : doc?.title || ""
+}
+
 type AppRecord = Application & {
   id: string | number
   measure_title?: string
@@ -142,12 +166,10 @@ export function ApplicationsPage() {
   const [deciding, setDeciding] = React.useState(false)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [measureDialog, setMeasureDialog] = React.useState<Measure | null | "new">(null)
-  const [measureForm, setMeasureForm] = React.useState({
-    title: "",
-    description: "",
-    llm_hint: "",
-    active: true,
-  })
+  const [measureForm, setMeasureForm] = React.useState<MeasureForm>(EMPTY_MEASURE_FORM)
+  const [measureTemplate, setMeasureTemplate] = React.useState<File | null>(null)
+  const [measureSaving, setMeasureSaving] = React.useState(false)
+  const measureTemplateRef = React.useRef<HTMLInputElement>(null)
 
   const loadApplications = React.useCallback(async () => {
     setLoading(true)
@@ -225,12 +247,26 @@ export function ApplicationsPage() {
 
   function openMeasureForm(m: Measure | null) {
     setMeasureDialog(m ? m : "new")
+    const docs = (m?.documents || []).map(documentTitle).filter(Boolean)
     setMeasureForm({
       title: m?.title || "",
       description: (m?.description as string) || "",
       llm_hint: (m?.llm_hint as string) || "",
+      documents: docs.length ? docs : [""],
+      placeholders: (m?.placeholders || []).map((p) => ({ key: p.key || "", label: p.label || "" })),
       active: m?.active !== false,
     })
+    setMeasureTemplate(null)
+  }
+
+  function patchMeasureForm(patch: Partial<MeasureForm>) {
+    setMeasureForm((f) => ({ ...f, ...patch }))
+  }
+
+  async function uploadMeasureTemplate(measureId: string | number, file: File) {
+    const fd = new FormData()
+    fd.append("file", file)
+    await api(`/settings/support-measures/${measureId}/template`, { method: "POST", body: fd })
   }
 
   async function saveMeasure() {
@@ -238,29 +274,43 @@ export function ApplicationsPage() {
       toast.error("Укажите название меры")
       return
     }
+    const editing = measureDialog && measureDialog !== "new" ? measureDialog : null
     const payload = {
       title: measureForm.title.trim(),
       description: measureForm.description.trim(),
       llm_hint: measureForm.llm_hint.trim(),
-      documents: measureDialog && measureDialog !== "new" ? measureDialog.documents || [] : [],
-      placeholders: measureDialog && measureDialog !== "new" ? measureDialog.placeholders || [] : [],
+      documents: measureForm.documents.map((d) => d.trim()).filter(Boolean),
+      placeholders: measureForm.placeholders
+        .map((p) => ({ key: p.key.trim(), label: p.label.trim() }))
+        .filter((p) => p.key),
       active: measureForm.active,
     }
+    setMeasureSaving(true)
     try {
-      if (measureDialog && measureDialog !== "new") {
-        await api(`/settings/support-measures/${measureDialog.id}`, {
+      let id: string | number | undefined = editing?.id
+      if (editing) {
+        await api(`/settings/support-measures/${editing.id}`, {
           method: "PUT",
           body: JSON.stringify(payload),
         })
-        toast.success("Мера обновлена")
       } else {
-        await api("/settings/support-measures", { method: "POST", body: JSON.stringify(payload) })
-        toast.success("Мера создана")
+        const r = await api<{ measure: { id: string | number } }>("/settings/support-measures", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        })
+        id = r.measure?.id
       }
+      // Шаблон грузится отдельным multipart-запросом уже к сохранённой мере:
+      // бэкенд по нему заодно вытаскивает плейсхолдеры из .docx.
+      if (measureTemplate && id != null) await uploadMeasureTemplate(id, measureTemplate)
+      toast.success(editing ? "Мера обновлена" : "Мера создана")
       setMeasureDialog(null)
+      setMeasureTemplate(null)
       void loadMeasures()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Ошибка")
+    } finally {
+      setMeasureSaving(false)
     }
   }
 
@@ -1102,16 +1152,19 @@ export function ApplicationsPage() {
       </Sheet>
 
       <Dialog open={!!measureDialog} onOpenChange={() => setMeasureDialog(null)}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{measureDialog && measureDialog !== "new" ? "Изменить меру поддержки" : "Новая мера поддержки"}</DialogTitle>
+            <DialogDescription>
+              Активная мера видна гражданам в боте MAX и уходит в базу знаний ИИ.
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="max-h-[65vh] space-y-4 overflow-y-auto p-1">
             <FormField>
               <Label>Название меры *</Label>
               <Input
                 value={measureForm.title}
-                onChange={(e) => setMeasureForm((f) => ({ ...f, title: e.target.value }))}
+                onChange={(e) => patchMeasureForm({ title: e.target.value })}
                 placeholder="Единовременная выплата"
               />
             </FormField>
@@ -1120,22 +1173,162 @@ export function ApplicationsPage() {
               <Textarea
                 rows={2}
                 value={measureForm.description}
-                onChange={(e) => setMeasureForm((f) => ({ ...f, description: e.target.value }))}
+                onChange={(e) => patchMeasureForm({ description: e.target.value })}
+                placeholder="Кратко: кому и при каких условиях положена"
               />
             </FormField>
             <FormField>
-              <Label>Подсказка для ИИ</Label>
+              <Label>Подсказка для ИИ (когда подходит мера)</Label>
               <Textarea
                 rows={2}
                 value={measureForm.llm_hint}
-                onChange={(e) => setMeasureForm((f) => ({ ...f, llm_hint: e.target.value }))}
+                onChange={(e) => patchMeasureForm({ llm_hint: e.target.value })}
+                placeholder="Ключевые слова и ситуации, по которым ИИ выберет эту меру"
               />
             </FormField>
+
+            <div className="space-y-2">
+              <Label>Требуемые документы</Label>
+              <p className="text-xs text-muted-foreground">
+                Бот запросит их у гражданина по одному, в этом порядке.
+              </p>
+              {measureForm.documents.map((doc, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    value={doc}
+                    placeholder="Название документа (напр. Паспорт)"
+                    onChange={(e) =>
+                      patchMeasureForm({
+                        documents: measureForm.documents.map((d, j) => (j === i ? e.target.value : d)),
+                      })
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    title="Удалить документ"
+                    aria-label="Удалить документ"
+                    onClick={() =>
+                      patchMeasureForm({ documents: measureForm.documents.filter((_, j) => j !== i) })
+                    }
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => patchMeasureForm({ documents: [...measureForm.documents, ""] })}
+              >
+                <Plus className="h-4 w-4" />
+                Добавить документ
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Поля шаблона</Label>
+              <p className="text-xs text-muted-foreground">
+                Разметка в .docx — <code>{"{{snake_case}}"}</code>. При загрузке шаблона поля
+                распознаются автоматически; здесь можно поправить подписи.
+              </p>
+              {measureForm.placeholders.map((ph, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    value={ph.key}
+                    placeholder="ключ ({{snake_case}})"
+                    onChange={(e) =>
+                      patchMeasureForm({
+                        placeholders: measureForm.placeholders.map((p, j) =>
+                          j === i ? { ...p, key: e.target.value } : p,
+                        ),
+                      })
+                    }
+                  />
+                  <Input
+                    value={ph.label}
+                    placeholder="Понятная подпись"
+                    onChange={(e) =>
+                      patchMeasureForm({
+                        placeholders: measureForm.placeholders.map((p, j) =>
+                          j === i ? { ...p, label: e.target.value } : p,
+                        ),
+                      })
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    title="Удалить поле"
+                    aria-label="Удалить поле"
+                    onClick={() =>
+                      patchMeasureForm({
+                        placeholders: measureForm.placeholders.filter((_, j) => j !== i),
+                      })
+                    }
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  patchMeasureForm({
+                    placeholders: [...measureForm.placeholders, { key: "", label: "" }],
+                  })
+                }
+              >
+                <Plus className="h-4 w-4" />
+                Добавить поле
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Шаблон заявления (.docx)</Label>
+              <button
+                type="button"
+                className="flex w-full cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed p-6 hover:bg-muted/50"
+                onClick={() => measureTemplateRef.current?.click()}
+              >
+                <FileUp className="h-7 w-7 text-muted-foreground" />
+                <span className="text-sm">
+                  {measureTemplate?.name ||
+                    (measureDialog && measureDialog !== "new" && measureDialog.has_template
+                      ? "Шаблон загружен — выберите файл, чтобы заменить"
+                      : "Нажмите, чтобы выбрать .docx")}
+                </span>
+                <input
+                  ref={measureTemplateRef}
+                  type="file"
+                  accept=".docx"
+                  className="hidden"
+                  onChange={(e) => setMeasureTemplate(e.target.files?.[0] || null)}
+                />
+              </button>
+              {measureDialog && measureDialog !== "new" && measureDialog.has_template ? (
+                <a
+                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  href={exportUrl(`/settings/support-measures/${measureDialog.id}/template`)}
+                  download
+                >
+                  Скачать текущий шаблон
+                </a>
+              ) : null}
+            </div>
+
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={measureForm.active}
-                onChange={(e) => setMeasureForm((f) => ({ ...f, active: e.target.checked }))}
+                onChange={(e) => patchMeasureForm({ active: e.target.checked })}
               />
               Активна (видна гражданам в боте)
             </label>
@@ -1144,7 +1337,8 @@ export function ApplicationsPage() {
             <Button variant="ghost" onClick={() => setMeasureDialog(null)}>
               Отмена
             </Button>
-            <Button onClick={() => void saveMeasure()}>
+            <Button disabled={measureSaving} onClick={() => void saveMeasure()}>
+              {measureSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {measureDialog && measureDialog !== "new" ? "Сохранить" : "Создать"}
             </Button>
           </DialogFooter>

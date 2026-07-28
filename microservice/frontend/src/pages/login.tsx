@@ -1,9 +1,8 @@
 import * as React from "react"
-import { useNavigate } from "react-router-dom"
 import { Eye, EyeOff, Loader2 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
-import { APP_BASE } from "@/lib/api"
+import { APP_BASE, APP_HOME } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -28,7 +27,6 @@ const SLIDES = [
 ] as const
 
 export function LoginPage() {
-  const navigate = useNavigate()
   const { theme, resolvedTheme } = useTheme()
   const [identifier, setIdentifier] = React.useState("")
   const [password, setPassword] = React.useState("")
@@ -51,7 +49,9 @@ export function LoginPage() {
       try {
         const who = await fetch(`${APP_BASE}/api/web/auth/whoami`, { credentials: "same-origin" })
         if (who.ok) {
-          navigate("/", { replace: true })
+          // Уходим на главную жёстким переходом по APP_HOME: react-router на
+          // index-маршруте оставил бы адрес без завершающего слэша.
+          window.location.replace(APP_HOME)
           return
         }
       } catch {
@@ -64,7 +64,7 @@ export function LoginPage() {
         /* ignore */
       }
     })()
-  }, [navigate])
+  }, [])
 
   React.useEffect(() => {
     const id = window.setInterval(() => {
@@ -96,8 +96,10 @@ export function LoginPage() {
         return
       }
       toast.success("Вход выполнен")
-      navigate("/", { replace: true })
-      window.location.reload()
+      // Один жёсткий переход на «…/application/» вместо navigate("/") + reload:
+      // так адрес главной сохраняет завершающий слэш и не плодится лишняя запись
+      // в истории браузера.
+      window.location.replace(APP_HOME)
     } catch {
       setError("Сервис авторизации недоступен. Повторите попытку.")
       setLoading(false)

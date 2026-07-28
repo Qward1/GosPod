@@ -35,12 +35,10 @@ microservice/data/measure_templates/
 *.db-shm
 
 # ── Документация и заметки: в репозитории только корневой README.md ──
-# (остальные .md остаются на диске, но не публикуются; history_styles.md —
-#  рабочие данные приложения, поэтому явно возвращается)
+# (все остальные .md — включая RELEASE_NOTES и data/history_styles.md —
+#  остаются на диске, но не публикуются)
 *.md
 !/README.md
-!/RELEASE_NOTES_*.md
-!microservice/data/history_styles.md
 
 # ── Локальные бэкапы, отчёты, черновики, образцы (на диске, не в репозитории) ──
 _backup/
